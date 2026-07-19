@@ -1,0 +1,6 @@
+{
+  "name": "Universal Social Media Downloader",
+  "description": "A professional-grade, multi-platform media downloader and library manager for personal use.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
