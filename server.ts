@@ -3,6 +3,8 @@ import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
+
+
 import {
   getSettings,
   saveSettings,
@@ -17,12 +19,16 @@ import {
   saveQueue,
   updateQueueItem,
 } from './server_db';
+
 import { MediaItem, DashboardStats, PlatformType } from './src/types';
 
 dotenv.config();
 
 const app = express();
+
 app.use(express.json());
+
+// Backend V3 Routes
 
 const PORT = 3000;
 

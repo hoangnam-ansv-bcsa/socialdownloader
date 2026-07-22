@@ -1,46 +1,77 @@
 import { execa } from "execa";
 
 export interface DownloadOptions {
-    output:string;
+  output: string;
+  format?: string;
+  cookies?: string;
+  proxy?: string;
+}
+
+export interface YtDlpResult {
+  stdout: string;
+  stderr: string;
 }
 
 export async function runYtDlp(
-    url:string,
-    options:DownloadOptions,
-    onProgress?:(line:string)=>void
-){
+  url: string,
+  options: DownloadOptions,
+  onProgress?: (line: string) => void
+): Promise<YtDlpResult> {
 
-    const subprocess = execa("yt-dlp",[
-        "-o",
-        options.output,
-        "--newline",
-        url
-    ]);
+  const args: string[] = [
+    "--newline",
+    "--ignore-errors",
+    "--no-playlist",
+  ];
 
-    subprocess.stdout?.on("data",(data)=>{
+  if (options.format) {
+    args.push("-f", options.format);
+  }
 
-        const line=data.toString();
+  if (options.cookies) {
+    args.push("--cookies", options.cookies);
+  }
 
-        if(onProgress){
+  if (options.proxy) {
+    args.push("--proxy", options.proxy);
+  }
 
-            onProgress(line);
+  args.push(
+    "-o",
+    options.output,
+    url
+  );
 
-        }
+  let stdout = "";
+  let stderr = "";
 
-    });
+  const subprocess = execa("yt-dlp", args);
 
-    subprocess.stderr?.on("data",(data)=>{
+  subprocess.stdout?.on("data", (data) => {
 
-        const line=data.toString();
+    const line = data.toString();
 
-        if(onProgress){
+    stdout += line;
 
-            onProgress(line);
+    onProgress?.(line);
 
-        }
+  });
 
-    });
+  subprocess.stderr?.on("data", (data) => {
 
-    await subprocess;
+    const line = data.toString();
+
+    stderr += line;
+
+    onProgress?.(line);
+
+  });
+
+  await subprocess;
+
+  return {
+    stdout,
+    stderr,
+  };
 
 }
