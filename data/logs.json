@@ -1,0 +1,23 @@
+[
+  {
+    "id": "rqta9tv",
+    "timestamp": "2026-07-22T16:21:28.575Z",
+    "level": "info",
+    "module": "Scraper",
+    "message": "Successfully analyzed 5 URLs using offline heuristic parser."
+  },
+  {
+    "id": "u3w7adk",
+    "timestamp": "2026-07-22T16:21:28.211Z",
+    "level": "info",
+    "module": "Scraper",
+    "message": "Analyzing 5 media URLs."
+  },
+  {
+    "id": "8bqvu7f",
+    "timestamp": "2026-07-22T16:18:32.945Z",
+    "level": "warning",
+    "module": "System",
+    "message": "Gemini API key not found. Using local heuristic parser for media analysis."
+  }
+]
