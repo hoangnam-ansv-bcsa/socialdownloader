@@ -208,18 +208,61 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   },
 
   analyzeUrls: async (urls) => {
-    set({ isAnalyzing: true });
+    set({
+      isAnalyzing: true,
+      analyzedItems: [],
+    });
+
     try {
       const res = await fetch('/api/analyze', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({ urls }),
       });
-      const analyzedItems = await res.json();
-      set({ analyzedItems, isAnalyzing: false });
+
+      const data: unknown = await res.json();
+
+      if (!res.ok) {
+        const message =
+          typeof data === 'object' &&
+          data !== null &&
+          'error' in data &&
+          typeof data.error === 'string'
+            ? data.error
+            : 'Không thể phân tích liên kết.';
+
+        throw new Error(message);
+      }
+
+      if (!Array.isArray(data)) {
+        throw new Error(
+          'Máy chủ trả về dữ liệu không đúng định dạng.',
+        );
+      }
+
+      set({
+        analyzedItems: data as MediaItem[],
+        isAnalyzing: false,
+      });
     } catch (err) {
-      console.error('Failed to analyze URLs', err);
-      set({ isAnalyzing: false });
+      const message =
+        err instanceof Error
+          ? err.message
+          : 'Không thể phân tích liên kết.';
+
+      console.error(
+        'Failed to analyze URLs:',
+        message,
+      );
+
+      alert(message);
+
+      set({
+        analyzedItems: [],
+        isAnalyzing: false,
+      });
     }
   },
 
