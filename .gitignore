@@ -10,3 +10,9 @@ coverage/
 # Private authentication files
 secrets/
 cookies.txt
+
+data/
+downloads/
+# Runtime data
+
+# Downloaded media
