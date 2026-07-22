@@ -1,5 +1,131 @@
 [
   {
+    "id": "ee297a01-aac0-42b1-a41b-078d9f7287bf",
+    "timestamp": "2026-07-22T17:55:26.234Z",
+    "level": "info",
+    "module": "Downloader",
+    "message": "Tải hoàn tất: YouTube_ACV Entertainment_Vd-fWd_PLDg_Anh Đã Lừa Dối Em Rồi Remix (Style Thazh x.mp4"
+  },
+  {
+    "id": "39b5082d-9dc1-4090-a65f-599ece63f2df",
+    "timestamp": "2026-07-22T17:55:19.210Z",
+    "level": "info",
+    "module": "Downloader",
+    "message": "Bắt đầu tải: Anh Đã Lừa Dối Em Rồi Remix (Style Thazh x Đông) Quang Kiệt - Anh Đã Lừa Dối Em Rồi Remix 2026"
+  },
+  {
+    "id": "e4348b8d-e255-4b51-9535-b2ed2d94e0d5",
+    "timestamp": "2026-07-22T17:55:11.743Z",
+    "level": "info",
+    "module": "System",
+    "message": "Server started on port 3000."
+  },
+  {
+    "id": "18c34b96-996e-4d18-a97e-c9ce13dabf8a",
+    "timestamp": "2026-07-22T17:52:37.116Z",
+    "level": "error",
+    "module": "Downloader",
+    "message": "Tải thất bại: Anh Đã Lừa Dối Em Rồi Remix (Style Thazh x Đông) Quang Kiệt - Anh Đã Lừa Dối Em Rồi Remix 2026. The \"signal\" option has been renamed to \"cancelSignal\" instead."
+  },
+  {
+    "id": "cc891c5a-bafb-4313-95e3-a68468f3fa43",
+    "timestamp": "2026-07-22T17:52:37.110Z",
+    "level": "info",
+    "module": "Downloader",
+    "message": "Bắt đầu tải: Anh Đã Lừa Dối Em Rồi Remix (Style Thazh x Đông) Quang Kiệt - Anh Đã Lừa Dối Em Rồi Remix 2026"
+  },
+  {
+    "id": "31ac4454-1c36-4907-a8db-c8b0bdac6da9",
+    "timestamp": "2026-07-22T17:52:37.108Z",
+    "level": "info",
+    "module": "Queue",
+    "message": "Đã thêm 1 tác vụ tải."
+  },
+  {
+    "id": "0555082a-6908-41c0-a01f-f9e0e84e33a3",
+    "timestamp": "2026-07-22T17:52:01.712Z",
+    "level": "info",
+    "module": "Analyzer",
+    "message": "Phân tích thành công 1/1 URL."
+  },
+  {
+    "id": "d8d35112-4d5d-4e3b-abca-fe9c69b1d62a",
+    "timestamp": "2026-07-22T17:51:56.452Z",
+    "level": "info",
+    "module": "Analyzer",
+    "message": "Đang phân tích 1 URL."
+  },
+  {
+    "id": "898e5779-7e2f-4112-b3ef-30611247aba4",
+    "timestamp": "2026-07-22T17:51:37.101Z",
+    "level": "info",
+    "module": "System",
+    "message": "Server started on port 3000."
+  },
+  {
+    "id": "0d7bb629-2704-4334-a8f7-2e173e50161c",
+    "timestamp": "2026-07-22T17:39:11.072Z",
+    "level": "error",
+    "module": "Analyzer",
+    "message": "Command failed with exit code 1: yt-dlp --dump-single-json --skip-download --no-playlist --no-warnings 'https://www.youtube.com/watch?v=Vd-fWd_PLDg&list=RDVd-fWd_PLDg&start_radio=1'\n\nERROR: [youtube] Vd-fWd_PLDg: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies. Also see  https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies  for tips on effectively exporting YouTube cookies\n\nnull"
+  },
+  {
+    "id": "f929e95b-cbeb-4b81-8ebf-ff01a609a496",
+    "timestamp": "2026-07-22T17:39:09.166Z",
+    "level": "info",
+    "module": "Analyzer",
+    "message": "Đang phân tích 1 URL."
+  },
+  {
+    "id": "6e4eb31a-10d8-43d4-bd38-aade7a703cce",
+    "timestamp": "2026-07-22T17:38:53.232Z",
+    "level": "info",
+    "module": "System",
+    "message": "Server started on port 3000."
+  },
+  {
+    "id": "669a9abe-fd62-4db2-b31e-67adcfe5b9d0",
+    "timestamp": "2026-07-22T17:37:33.735Z",
+    "level": "error",
+    "module": "Analyzer",
+    "message": "Command failed with exit code 1: yt-dlp --dump-single-json --skip-download --no-playlist --no-warnings 'https://www.youtube.com/watch?v=Vd-fWd_PLDg&list=RDVd-fWd_PLDg&start_radio=1'\n\nERROR: [youtube] Vd-fWd_PLDg: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies. Also see  https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies  for tips on effectively exporting YouTube cookies\n\nnull"
+  },
+  {
+    "id": "e3008fc9-4e87-4c5f-b70d-57eda9872642",
+    "timestamp": "2026-07-22T17:37:32.174Z",
+    "level": "info",
+    "module": "Analyzer",
+    "message": "Đang phân tích 1 URL."
+  },
+  {
+    "id": "25044c00-a43b-4f63-8c0f-ed90e0c6a577",
+    "timestamp": "2026-07-22T17:36:31.400Z",
+    "level": "info",
+    "module": "System",
+    "message": "Server started on port 3000."
+  },
+  {
+    "id": "7ea26930-9930-462b-948f-4571e4d26e03",
+    "timestamp": "2026-07-22T17:34:46.694Z",
+    "level": "error",
+    "module": "Analyzer",
+    "message": "Command failed with exit code 1: yt-dlp --dump-single-json --skip-download --no-playlist --no-warnings 'https://www.youtube.com/watch?v=xRLCFgm2bVE&list=RDPlg9DCmiIM4&index=4'\n\nERROR: [youtube] xRLCFgm2bVE: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication. See  https://github.com/yt-dlp/yt-dlp/wiki/FAQ#how-do-i-pass-cookies-to-yt-dlp  for how to manually pass cookies. Also see  https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies  for tips on effectively exporting YouTube cookies\n\nnull"
+  },
+  {
+    "id": "bc9cf68f-e169-404a-98df-99b214327a52",
+    "timestamp": "2026-07-22T17:34:43.148Z",
+    "level": "info",
+    "module": "Analyzer",
+    "message": "Đang phân tích 1 URL."
+  },
+  {
+    "id": "7bab3b38-472a-4087-9400-df65227deff3",
+    "timestamp": "2026-07-22T17:32:16.606Z",
+    "level": "info",
+    "module": "System",
+    "message": "Server started on port 3000."
+  },
+  {
     "id": "rqta9tv",
     "timestamp": "2026-07-22T16:21:28.575Z",
     "level": "info",

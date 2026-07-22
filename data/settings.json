@@ -1,7 +1,7 @@
 {
   "theme": "dark",
   "language": "en",
-  "defaultDownloadFolder": "C:\\Users\\Hoang Nam\\Downloads",
+  "defaultDownloadFolder": "/workspaces/socialdownloader/downloads",
   "concurrentDownloads": 5,
   "retryCount": 3,
   "timeoutSeconds": 30,

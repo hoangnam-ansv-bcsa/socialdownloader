@@ -1,12 +1,22 @@
-import fs from 'fs';
-import path from 'path';
-import { AppSettings, LogEntry, MediaItem, DashboardStats } from './src/types';
+import fs from 'node:fs';
+import path from 'node:path';
+import {
+  AppSettings,
+  LogEntry,
+  MediaItem,
+} from './src/types';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const ROOT_DIR = process.cwd();
+const DATA_DIR = path.join(ROOT_DIR, 'data');
+const DOWNLOAD_DIR = path.join(ROOT_DIR, 'downloads');
 
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
+fs.mkdirSync(DATA_DIR, {
+  recursive: true,
+});
+
+fs.mkdirSync(DOWNLOAD_DIR, {
+  recursive: true,
+});
 
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const LOGS_FILE = path.join(DATA_DIR, 'logs.json');
@@ -15,121 +25,229 @@ const QUEUE_FILE = path.join(DATA_DIR, 'queue.json');
 
 const defaultSettings: AppSettings = {
   theme: 'dark',
-  language: 'en',
-  defaultDownloadFolder: 'C:\\Users\\Hoang Nam\\Downloads',
-  concurrentDownloads: 5,
+  language: 'vi',
+  defaultDownloadFolder: DOWNLOAD_DIR,
+  concurrentDownloads: 2,
   retryCount: 3,
-  timeoutSeconds: 30,
+  timeoutSeconds: 120,
   autoUpdateChecker: true,
   fileNameTemplate: '{platform}_{author}_{id}_{title}',
 };
 
-export function getSettings(): AppSettings {
-  if (!fs.existsSync(SETTINGS_FILE)) {
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(defaultSettings, null, 2));
-    return defaultSettings;
+function readJsonFile<T>(
+  filePath: string,
+  fallbackValue: T,
+): T {
+  if (!fs.existsSync(filePath)) {
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify(fallbackValue, null, 2),
+      'utf-8',
+    );
+
+    return fallbackValue;
   }
+
   try {
-    const data = fs.readFileSync(SETTINGS_FILE, 'utf-8');
-    return JSON.parse(data);
-  } catch (err) {
-    return defaultSettings;
+    const rawData = fs.readFileSync(
+      filePath,
+      'utf-8',
+    );
+
+    return JSON.parse(rawData) as T;
+  } catch {
+    return fallbackValue;
   }
 }
 
-export function saveSettings(settings: AppSettings): void {
-  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+function writeJsonFile<T>(
+  filePath: string,
+  value: T,
+): void {
+  fs.writeFileSync(
+    filePath,
+    JSON.stringify(value, null, 2),
+    'utf-8',
+  );
+}
+
+export function getSettings(): AppSettings {
+  const settings = readJsonFile<AppSettings>(
+    SETTINGS_FILE,
+    defaultSettings,
+  );
+
+  const invalidWindowsPath =
+    settings.defaultDownloadFolder.includes('\\') ||
+    /^[A-Za-z]:/.test(settings.defaultDownloadFolder);
+
+  if (invalidWindowsPath) {
+    const correctedSettings: AppSettings = {
+      ...settings,
+      defaultDownloadFolder: DOWNLOAD_DIR,
+    };
+
+    writeJsonFile(
+      SETTINGS_FILE,
+      correctedSettings,
+    );
+
+    return correctedSettings;
+  }
+
+  return settings;
+}
+
+export function saveSettings(
+  settings: AppSettings,
+): void {
+  const normalizedFolder =
+    settings.defaultDownloadFolder.trim() ||
+    DOWNLOAD_DIR;
+
+  fs.mkdirSync(normalizedFolder, {
+    recursive: true,
+  });
+
+  writeJsonFile(
+    SETTINGS_FILE,
+    {
+      ...settings,
+      defaultDownloadFolder: normalizedFolder,
+    },
+  );
 }
 
 export function getLogs(): LogEntry[] {
-  if (!fs.existsSync(LOGS_FILE)) {
-    fs.writeFileSync(LOGS_FILE, JSON.stringify([], null, 2));
-    return [];
-  }
-  try {
-    const data = fs.readFileSync(LOGS_FILE, 'utf-8');
-    return JSON.parse(data);
-  } catch (err) {
-    return [];
-  }
+  return readJsonFile<LogEntry[]>(
+    LOGS_FILE,
+    [],
+  );
 }
 
-export function addLog(level: LogEntry['level'], module: string, message: string): void {
+export function addLog(
+  level: LogEntry['level'],
+  module: string,
+  message: string,
+): void {
   const logs = getLogs();
+
   const newLog: LogEntry = {
-    id: Math.random().toString(36).substring(2, 9),
+    id: crypto.randomUUID(),
     timestamp: new Date().toISOString(),
     level,
     module,
     message,
   };
-  logs.unshift(newLog); // Newest first
-  // Limit to 500 logs
-  const trimmed = logs.slice(0, 500);
-  fs.writeFileSync(LOGS_FILE, JSON.stringify(trimmed, null, 2));
+
+  writeJsonFile(
+    LOGS_FILE,
+    [newLog, ...logs].slice(0, 500),
+  );
 }
 
 export function clearLogs(): void {
-  fs.writeFileSync(LOGS_FILE, JSON.stringify([], null, 2));
+  writeJsonFile(
+    LOGS_FILE,
+    [],
+  );
 }
 
 export function getHistory(): MediaItem[] {
-  if (!fs.existsSync(HISTORY_FILE)) {
-    fs.writeFileSync(HISTORY_FILE, JSON.stringify([], null, 2));
-    return [];
-  }
-  try {
-    const data = fs.readFileSync(HISTORY_FILE, 'utf-8');
-    return JSON.parse(data);
-  } catch (err) {
-    return [];
-  }
+  return readJsonFile<MediaItem[]>(
+    HISTORY_FILE,
+    [],
+  );
 }
 
-export function addHistory(item: MediaItem): void {
+export function addHistory(
+  item: MediaItem,
+): void {
   const history = getHistory();
-  // Avoid duplicate history entries
-  const existingIndex = history.findIndex((h) => h.id === item.id);
-  if (existingIndex > -1) {
-    history[existingIndex] = { ...item, status: 'completed' };
+
+  const completedItem: MediaItem = {
+    ...item,
+    status: 'completed',
+    progress: 100,
+  };
+
+  const existingIndex = history.findIndex(
+    (historyItem) => historyItem.id === item.id,
+  );
+
+  if (existingIndex >= 0) {
+    history[existingIndex] = completedItem;
   } else {
-    history.unshift({ ...item, status: 'completed' });
+    history.unshift(completedItem);
   }
-  fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
+
+  writeJsonFile(
+    HISTORY_FILE,
+    history,
+  );
 }
 
-export function removeHistoryItem(id: string): void {
-  let history = getHistory();
-  history = history.filter((h) => h.id !== id);
-  fs.writeFileSync(HISTORY_FILE, JSON.stringify(history, null, 2));
+export function removeHistoryItem(
+  id: string,
+): void {
+  writeJsonFile(
+    HISTORY_FILE,
+    getHistory().filter(
+      (item) => item.id !== id,
+    ),
+  );
 }
 
 export function clearHistory(): void {
-  fs.writeFileSync(HISTORY_FILE, JSON.stringify([], null, 2));
+  writeJsonFile(
+    HISTORY_FILE,
+    [],
+  );
 }
 
 export function getQueue(): MediaItem[] {
-  if (!fs.existsSync(QUEUE_FILE)) {
-    fs.writeFileSync(QUEUE_FILE, JSON.stringify([], null, 2));
-    return [];
-  }
-  try {
-    const data = fs.readFileSync(QUEUE_FILE, 'utf-8');
-    return JSON.parse(data);
-  } catch (err) {
-    return [];
-  }
+  return readJsonFile<MediaItem[]>(
+    QUEUE_FILE,
+    [],
+  );
 }
 
-export function saveQueue(queue: MediaItem[]): void {
-  fs.writeFileSync(QUEUE_FILE, JSON.stringify(queue, null, 2));
+export function saveQueue(
+  queue: MediaItem[],
+): void {
+  writeJsonFile(
+    QUEUE_FILE,
+    queue,
+  );
 }
 
-export function updateQueueItem(item: MediaItem): void {
+export function updateQueueItem(
+  item: MediaItem,
+): void {
   const queue = getQueue();
-  const index = queue.findIndex((q) => q.id === item.id);
-  if (index > -1) {
+
+  const index = queue.findIndex(
+    (queueItem) => queueItem.id === item.id,
+  );
+
+  if (index >= 0) {
     queue[index] = item;
-    saveQueue(queue);
+  } else {
+    queue.push(item);
   }
+
+  saveQueue(queue);
+}
+
+export function getDownloadDirectory(): string {
+  const settings = getSettings();
+  const downloadDirectory =
+    settings.defaultDownloadFolder ||
+    DOWNLOAD_DIR;
+
+  fs.mkdirSync(downloadDirectory, {
+    recursive: true,
+  });
+
+  return downloadDirectory;
 }
