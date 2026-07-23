@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "SocialDownloader Facebook Helper",
+  "version": "1.0.0",
+  "description": "Bridge Facebook browser session to SocialDownloader backend",
+  "permissions": [
+    "cookies",
+    "tabs"
+  ],
+  "host_permissions": [
+    "*://*.facebook.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}
