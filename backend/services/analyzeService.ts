@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execa } from 'execa';
+import { chromium } from 'playwright';
 
 export interface AnalyzeResult {
   id: string;
@@ -438,6 +439,292 @@ export async function analyzeChannel(
     });
 }
 
+async function loadTikTokBrowserCookies() {
+  const cookiesPath = path.resolve(
+    process.env.YT_DLP_COOKIES ||
+      'secrets/cookies.txt',
+  );
+
+  try {
+    const cookieText = await fs.readFile(
+      cookiesPath,
+      'utf8',
+    );
+
+    return cookieText
+      .split(/\r?\n/)
+      .filter((line) => {
+        const trimmed = line.trim();
+
+        return (
+          trimmed.length > 0 &&
+          (
+            !trimmed.startsWith('#') ||
+            trimmed.startsWith('#HttpOnly_')
+          )
+        );
+      })
+      .map((line) => {
+        const parts = line.split('\t');
+
+        if (parts.length < 7) {
+          return null;
+        }
+
+        const [
+          rawDomain,
+          ,
+          cookiePath,
+          secure,
+          expires,
+          name,
+          ...valueParts
+        ] = parts;
+
+        const domain = rawDomain.replace(
+          /^#HttpOnly_/,
+          '',
+        );
+
+        if (!domain.includes('tiktok.com')) {
+          return null;
+        }
+
+        return {
+          name,
+          value: valueParts.join('\t'),
+          domain,
+          path: cookiePath || '/',
+          secure: secure === 'TRUE',
+          expires:
+            Number(expires) > 0
+              ? Number(expires)
+              : -1,
+        };
+      })
+      .filter(
+        (
+          cookie,
+        ): cookie is NonNullable<typeof cookie> =>
+          cookie !== null,
+      );
+  } catch {
+    return [];
+  }
+}
+
+async function analyzeTikTokChannelRange(
+  url: string,
+  start: number,
+  end: number,
+): Promise<AnalyzeResult[]> {
+  const browser = await chromium.launch({
+    headless: true,
+    args: [
+      '--disable-blink-features=AutomationControlled',
+      '--no-sandbox',
+    ],
+  });
+
+  try {
+    const context = await browser.newContext({
+      viewport: {
+        width: 1600,
+        height: 1000,
+      },
+    });
+
+    const cookies =
+      await loadTikTokBrowserCookies();
+
+    if (cookies.length > 0) {
+      await context.addCookies(cookies);
+    }
+
+    const page = await context.newPage();
+
+    await page.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: 120_000,
+    });
+
+    await page.waitForTimeout(8_000);
+
+    let previousCount = 0;
+    let unchangedRounds = 0;
+
+    for (
+      let round = 0;
+      round < 120;
+      round += 1
+    ) {
+      const currentCount =
+        await page.locator(
+          'a[href*="/video/"], a[href*="/photo/"]',
+        ).count();
+
+      if (currentCount >= end) {
+        break;
+      }
+
+      if (currentCount === previousCount) {
+        unchangedRounds += 1;
+      } else {
+        unchangedRounds = 0;
+        previousCount = currentCount;
+      }
+
+      if (unchangedRounds >= 6) {
+        break;
+      }
+
+      await page.mouse.wheel(0, 1800);
+      await page.waitForTimeout(1_500);
+    }
+
+    await page.mouse.wheel(0, -1200);
+    await page.waitForTimeout(2_000);
+    await page.mouse.wheel(0, 1200);
+    await page.waitForTimeout(3_000);
+
+    await page.waitForFunction(
+      () =>
+        Array.from(
+          document.querySelectorAll<HTMLAnchorElement>(
+            'a[href*="/video/"], a[href*="/photo/"]',
+          ),
+        ).some((anchor) => {
+          const image =
+            anchor.querySelector<HTMLImageElement>(
+              'img',
+            );
+
+          return Boolean(
+            image?.currentSrc ||
+            image?.src,
+          );
+        }),
+      {
+        timeout: 15_000,
+      },
+    ).catch(() => undefined);
+
+    const rawItems = await page.evaluate(() => {
+      const anchors = Array.from(
+        document.querySelectorAll<HTMLAnchorElement>(
+          'a[href*="/video/"], a[href*="/photo/"]',
+        ),
+      );
+
+      return anchors.map((anchor) => {
+        const image =
+          anchor.querySelector<HTMLImageElement>(
+            'img',
+          );
+
+        const href =
+          anchor.href.split('?')[0];
+
+        const title =
+          image?.alt?.trim() ||
+          anchor.getAttribute(
+            'aria-label',
+          )?.trim() ||
+          anchor.innerText.trim() ||
+          'Không có tiêu đề';
+
+        return {
+          href,
+          title,
+          thumbnail:
+            image?.currentSrc ||
+            image?.src ||
+            '',
+        };
+      });
+    });
+
+    const uniqueItems = Array.from(
+      new Map(
+        rawItems.map((item) => [
+          item.href,
+          item,
+        ]),
+      ).values(),
+    );
+
+    if (uniqueItems.length === 0) {
+      throw new Error(
+        'Không lấy được danh sách bài TikTok. Cookie có thể đã hết hạn hoặc TikTok đang yêu cầu CAPTCHA.',
+      );
+    }
+
+    const authorMatch = url.match(
+      /tiktok\.com\/@([^/?]+)/i,
+    );
+
+    const author = authorMatch?.[1]
+      ? `@${authorMatch[1]}`
+      : 'TikTok';
+
+    const mappedItems = uniqueItems
+      .slice(start - 1, end)
+      .map((item) => {
+        const idMatch = item.href.match(
+          /\/(?:video|photo)\/(\d+)/,
+        );
+
+        const isPhoto =
+          item.href.includes('/photo/');
+
+        return {
+          id:
+            idMatch?.[1] ||
+            randomUUID(),
+          url: item.href,
+          platform: 'TikTok',
+          title: item.title,
+          author,
+          thumbnail: item.thumbnail,
+          estimatedSize: 0,
+          mediaType: isPhoto
+            ? 'album' as const
+            : 'video' as const,
+        };
+      });
+
+    for (const item of mappedItems) {
+      const needsMetadata =
+        item.mediaType === 'video' &&
+        (
+          item.title === 'Không có tiêu đề' ||
+          !item.thumbnail
+        );
+
+      if (!needsMetadata) {
+        continue;
+      }
+
+      try {
+        const enriched =
+          await analyzeUrl(item.url);
+
+        item.title = enriched.title;
+        item.thumbnail =
+          enriched.thumbnail;
+        item.estimatedSize =
+          enriched.estimatedSize;
+      } catch {
+        // Giữ dữ liệu cơ bản nếu TikTok từ chối yêu cầu bổ sung.
+      }
+    }
+
+    return mappedItems;
+  } finally {
+    await browser.close();
+  }
+}
+
 export async function analyzeChannelRange(
   url: string,
   start: number,
@@ -452,6 +739,14 @@ export async function analyzeChannelRange(
     normalizedStart,
     Math.floor(end),
   );
+
+  if (isTikTokUrl(url)) {
+    return analyzeTikTokChannelRange(
+      url,
+      normalizedStart,
+      normalizedEnd,
+    );
+  }
 
   const args: string[] = [
     '--dump-single-json',
