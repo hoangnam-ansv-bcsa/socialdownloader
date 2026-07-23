@@ -1115,118 +1115,38 @@ async function analyzeFacebookChannelRange(
     ) {
       const currentCount =
         await page.evaluate(() => {
+          type FacebookCollectedItem = {
+            key: string;
+            id: string;
+            href: string;
+            title: string;
+            thumbnail: string;
+            mediaType:
+              | 'album'
+              | 'photo'
+              | 'video';
+          };
+
+          const extendedWindow =
+            window as typeof window & {
+              __facebookCollectedItems?: Record<
+                string,
+                FacebookCollectedItem
+              >;
+            };
+
+          const store =
+            extendedWindow
+              .__facebookCollectedItems ||
+            {};
+
           const anchors = Array.from(
             document.querySelectorAll<HTMLAnchorElement>(
               'a[href]',
             ),
           );
 
-          const keys = new Set<string>();
-
           for (const anchor of anchors) {
-            try {
-              const parsedUrl =
-                new URL(anchor.href);
-
-              const pathname =
-                parsedUrl.pathname;
-
-              if (
-                pathname.startsWith('/photo')
-              ) {
-                const fbid =
-                  parsedUrl.searchParams.get(
-                    'fbid',
-                  );
-
-                const set =
-                  parsedUrl.searchParams.get(
-                    'set',
-                  );
-
-                if (!fbid) {
-                  continue;
-                }
-
-                if (
-                  set?.startsWith('pcb.')
-                ) {
-                  keys.add(
-                    `album:${set.slice(4)}`,
-                  );
-                } else {
-                  keys.add(
-                    `photo:${fbid}`,
-                  );
-                }
-
-                continue;
-              }
-
-              const reelMatch =
-                pathname.match(
-                  /^\/reel\/(\d+)/,
-                );
-
-              if (reelMatch) {
-                keys.add(
-                  `video:${reelMatch[1]}`,
-                );
-                continue;
-              }
-
-              const videoMatch =
-                pathname.match(
-                  /\/videos\/(\d+)/,
-                );
-
-              if (videoMatch) {
-                keys.add(
-                  `video:${videoMatch[1]}`,
-                );
-              }
-            } catch {
-              // Bỏ qua đường dẫn không hợp lệ.
-            }
-          }
-
-          return keys.size;
-        });
-
-      if (currentCount >= end) {
-        break;
-      }
-
-      if (currentCount === previousCount) {
-        unchangedRounds += 1;
-      } else {
-        previousCount = currentCount;
-        unchangedRounds = 0;
-      }
-
-      if (unchangedRounds >= 8) {
-        break;
-      }
-
-      await page.mouse.wheel(0, 2200);
-      await page.waitForTimeout(1_500);
-    }
-
-    await page.mouse.wheel(0, -1400);
-    await page.waitForTimeout(2_000);
-    await page.mouse.wheel(0, 1400);
-    await page.waitForTimeout(3_000);
-
-    const rawItems =
-      await page.evaluate(() => {
-        const anchors = Array.from(
-          document.querySelectorAll<HTMLAnchorElement>(
-            'a[href]',
-          ),
-        );
-
-        return anchors
-          .map((anchor) => {
             try {
               const parsedUrl =
                 new URL(anchor.href);
@@ -1266,7 +1186,7 @@ async function analyzeFacebookChannelRange(
                   );
 
                 if (!fbid) {
-                  return null;
+                  continue;
                 }
 
                 const canonicalUrl =
@@ -1289,29 +1209,34 @@ async function analyzeFacebookChannelRange(
                 if (
                   set?.startsWith('pcb.')
                 ) {
-                  return {
-                    key:
-                      `album:${set.slice(4)}`,
-                    id: set.slice(4),
+                  const id = set.slice(4);
+                  const key = `album:${id}`;
+
+                  store[key] = {
+                    key,
+                    id,
                     href:
                       canonicalUrl.toString(),
                     title,
                     thumbnail,
-                    mediaType:
-                      'album' as const,
+                    mediaType: 'album',
+                  };
+                } else {
+                  const key =
+                    `photo:${fbid}`;
+
+                  store[key] = {
+                    key,
+                    id: fbid,
+                    href:
+                      canonicalUrl.toString(),
+                    title,
+                    thumbnail,
+                    mediaType: 'photo',
                   };
                 }
 
-                return {
-                  key: `photo:${fbid}`,
-                  id: fbid,
-                  href:
-                    canonicalUrl.toString(),
-                  title,
-                  thumbnail,
-                  mediaType:
-                    'photo' as const,
-                };
+                continue;
               }
 
               const reelMatch =
@@ -1320,17 +1245,20 @@ async function analyzeFacebookChannelRange(
                 );
 
               if (reelMatch) {
-                return {
-                  key:
-                    `video:${reelMatch[1]}`,
-                  id: reelMatch[1],
+                const id = reelMatch[1];
+                const key = `video:${id}`;
+
+                store[key] = {
+                  key,
+                  id,
                   href:
-                    `https://www.facebook.com/reel/${reelMatch[1]}`,
+                    `https://www.facebook.com/reel/${id}`,
                   title,
                   thumbnail,
-                  mediaType:
-                    'video' as const,
+                  mediaType: 'video',
                 };
+
+                continue;
               }
 
               const videoMatch =
@@ -1339,31 +1267,82 @@ async function analyzeFacebookChannelRange(
                 );
 
               if (videoMatch) {
-                return {
-                  key:
-                    `video:${videoMatch[1]}`,
-                  id: videoMatch[1],
+                const id = videoMatch[1];
+                const key = `video:${id}`;
+
+                store[key] = {
+                  key,
+                  id,
                   href:
                     anchor.href.split('?')[0],
                   title,
                   thumbnail,
-                  mediaType:
-                    'video' as const,
+                  mediaType: 'video',
                 };
               }
-
-              return null;
             } catch {
-              return null;
+              // Bỏ qua đường dẫn không hợp lệ.
             }
-          })
-          .filter(
-            (
-              item,
-            ): item is NonNullable<
-              typeof item
-            > => item !== null,
-          );
+          }
+
+          extendedWindow
+            .__facebookCollectedItems =
+            store;
+
+          return Object.keys(store).length;
+        });
+
+      if (currentCount >= end) {
+        break;
+      }
+
+      if (currentCount === previousCount) {
+        unchangedRounds += 1;
+      } else {
+        previousCount = currentCount;
+        unchangedRounds = 0;
+      }
+
+      if (unchangedRounds >= 8) {
+        break;
+      }
+
+      await page.mouse.wheel(0, 2200);
+      await page.waitForTimeout(1_500);
+    }
+
+    await page.mouse.wheel(0, -1400);
+    await page.waitForTimeout(2_000);
+    await page.mouse.wheel(0, 1400);
+    await page.waitForTimeout(3_000);
+
+    const rawItems =
+      await page.evaluate(() => {
+        type FacebookCollectedItem = {
+          key: string;
+          id: string;
+          href: string;
+          title: string;
+          thumbnail: string;
+          mediaType:
+            | 'album'
+            | 'photo'
+            | 'video';
+        };
+
+        const extendedWindow =
+          window as typeof window & {
+            __facebookCollectedItems?: Record<
+              string,
+              FacebookCollectedItem
+            >;
+          };
+
+        return Object.values(
+          extendedWindow
+            .__facebookCollectedItems ||
+            {},
+        );
       });
 
     const uniqueItems = Array.from(
