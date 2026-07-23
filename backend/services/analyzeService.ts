@@ -65,6 +65,15 @@ function isTikTokUrl(url: string): boolean {
   );
 }
 
+function isFacebookUrl(url: string): boolean {
+  const hostname = getHostname(url);
+
+  return (
+    hostname === 'facebook.com' ||
+    hostname.endsWith('.facebook.com')
+  );
+}
+
 function isYouTubeUrl(url: string): boolean {
   const hostname = getHostname(url);
 
@@ -74,6 +83,28 @@ function isYouTubeUrl(url: string): boolean {
     hostname === 'youtu.be' ||
     hostname.endsWith('.youtu.be')
   );
+}
+
+function isFacebookPhotoUrl(url: string): boolean {
+  const hostname = getHostname(url);
+
+  if (
+    hostname !== 'facebook.com' &&
+    !hostname.endsWith('.facebook.com')
+  ) {
+    return false;
+  }
+
+  try {
+    const parsedUrl = new URL(url);
+
+    return (
+      parsedUrl.pathname.startsWith('/photo') &&
+      parsedUrl.searchParams.has('fbid')
+    );
+  } catch {
+    return false;
+  }
 }
 
 function isInstagramPostUrl(url: string): boolean {
@@ -343,6 +374,270 @@ function mapEntry(
   };
 }
 
+async function loadFacebookBrowserCookies() {
+  const cookiesPath = path.resolve(
+    process.env.YT_DLP_COOKIES ||
+      'secrets/cookies.txt',
+  );
+
+  try {
+    const cookieText = await fs.readFile(
+      cookiesPath,
+      'utf8',
+    );
+
+    return cookieText
+      .split(/\r?\n/)
+      .filter((line) => {
+        const trimmed = line.trim();
+
+        return (
+          trimmed.length > 0 &&
+          (
+            !trimmed.startsWith('#') ||
+            trimmed.startsWith('#HttpOnly_')
+          )
+        );
+      })
+      .map((line) => {
+        const parts = line.split('\t');
+
+        if (parts.length < 7) {
+          return null;
+        }
+
+        const [
+          rawDomain,
+          ,
+          cookiePath,
+          secure,
+          expires,
+          name,
+          ...valueParts
+        ] = parts;
+
+        const domain = rawDomain.replace(
+          /^#HttpOnly_/,
+          '',
+        );
+
+        if (!domain.includes('facebook.com')) {
+          return null;
+        }
+
+        return {
+          name,
+          value: valueParts.join('\t'),
+          domain,
+          path: cookiePath || '/',
+          secure: secure === 'TRUE',
+          expires:
+            Number(expires) > 0
+              ? Number(expires)
+              : -1,
+        };
+      })
+      .filter(
+        (
+          cookie,
+        ): cookie is NonNullable<typeof cookie> =>
+          cookie !== null,
+      );
+  } catch {
+    return [];
+  }
+}
+
+async function analyzeFacebookPhoto(
+  url: string,
+): Promise<AnalyzeResult> {
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--no-sandbox'],
+  });
+
+  try {
+    const context = await browser.newContext({
+      viewport: {
+        width: 1600,
+        height: 1000,
+      },
+    });
+
+    const cookies =
+      await loadFacebookBrowserCookies();
+
+    if (cookies.length > 0) {
+      await context.addCookies(cookies);
+    }
+
+    const page = await context.newPage();
+
+    await page.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: 120_000,
+    });
+
+    await page.waitForTimeout(10_000);
+
+    if (page.url().includes('/login/')) {
+      throw new Error(
+        'Cookie Facebook đã hết hạn hoặc không có quyền xem bài viết.',
+      );
+    }
+
+    const collected =
+      new Map<string, string>();
+
+    let title = '';
+    let author = 'Facebook';
+
+    for (
+      let round = 0;
+      round < 30;
+      round += 1
+    ) {
+      const data = await page.evaluate(() => {
+        const images = Array.from(
+          document.querySelectorAll<HTMLImageElement>(
+            'img',
+          ),
+        )
+          .map((image) => ({
+            src:
+              image.currentSrc ||
+              image.src,
+            width: image.naturalWidth,
+            height: image.naturalHeight,
+          }))
+          .filter(
+            (image) =>
+              image.src.includes('scontent') &&
+              image.src.includes('fbcdn.net') &&
+              image.width >= 500 &&
+              image.height >= 500,
+          )
+          .map((image) => image.src);
+
+        const ogTitle =
+          document
+            .querySelector<HTMLMetaElement>(
+              'meta[property="og:title"]',
+            )
+            ?.content ||
+          '';
+
+        const ogDescription =
+          document
+            .querySelector<HTMLMetaElement>(
+              'meta[property="og:description"]',
+            )
+            ?.content ||
+          '';
+
+        return {
+          images,
+          ogTitle,
+          ogDescription,
+          documentTitle: document.title,
+        };
+      });
+
+      for (const imageUrl of data.images) {
+        collected.set(
+          imageUrl.split('?')[0],
+          imageUrl,
+        );
+      }
+
+      if (!title) {
+        title =
+          data.ogDescription ||
+          data.ogTitle ||
+          data.documentTitle ||
+          'Bài ảnh Facebook';
+      }
+
+      if (
+        author === 'Facebook' &&
+        data.ogTitle
+      ) {
+        author =
+          data.ogTitle
+            .replace(/\s*\|\s*Facebook.*$/i, '')
+            .trim() ||
+          'Facebook';
+      }
+
+      const clicked =
+        await page.evaluate(() => {
+          const elements = Array.from(
+            document.querySelectorAll<HTMLElement>(
+              '[aria-label]',
+            ),
+          );
+
+          const next = elements.find(
+            (element) => {
+              const label =
+                element.getAttribute(
+                  'aria-label',
+                ) || '';
+
+              return /next|tiếp|sau/i.test(
+                label,
+              );
+            },
+          );
+
+          if (!next) {
+            return false;
+          }
+
+          next.click();
+          return true;
+        });
+
+      if (!clicked) {
+        break;
+      }
+
+      await page.waitForTimeout(2_000);
+    }
+
+    const imageUrls =
+      Array.from(collected.values());
+
+    if (imageUrls.length === 0) {
+      throw new Error(
+        'Không tìm thấy ảnh trong bài Facebook.',
+      );
+    }
+
+    const parsedUrl = new URL(url);
+
+    const id =
+      parsedUrl.searchParams.get('fbid') ||
+      randomUUID();
+
+    return {
+      id,
+      url,
+      platform: 'Facebook',
+      title,
+      author,
+      thumbnail: imageUrls[0],
+      estimatedSize: 0,
+      mediaType:
+        imageUrls.length > 1
+          ? 'album'
+          : 'photo',
+    };
+  } finally {
+    await browser.close();
+  }
+}
+
 async function loadInstagramBrowserCookies() {
   const cookiesPath = path.resolve(
     process.env.YT_DLP_COOKIES ||
@@ -561,6 +856,10 @@ export async function analyzeUrl(
     return analyzeInstagramPost(url);
   }
 
+  if (isFacebookPhotoUrl(url)) {
+    return analyzeFacebookPhoto(url);
+  }
+
   const args: string[] = [
     '--dump-single-json',
     '--skip-download',
@@ -742,6 +1041,367 @@ async function loadTikTokBrowserCookies() {
       );
   } catch {
     return [];
+  }
+}
+
+async function analyzeFacebookChannelRange(
+  url: string,
+  start: number,
+  end: number,
+): Promise<AnalyzeResult[]> {
+  const browser = await chromium.launch({
+    headless: true,
+    args: [
+      '--disable-blink-features=AutomationControlled',
+      '--no-sandbox',
+    ],
+  });
+
+  try {
+    const context = await browser.newContext({
+      viewport: {
+        width: 1600,
+        height: 1000,
+      },
+    });
+
+    const cookies =
+      await loadFacebookBrowserCookies();
+
+    if (cookies.length > 0) {
+      await context.addCookies(cookies);
+    }
+
+    const page = await context.newPage();
+
+    await page.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: 120_000,
+    });
+
+    await page.waitForTimeout(10_000);
+
+    if (page.url().includes('/login/')) {
+      throw new Error(
+        'Cookie Facebook đã hết hạn hoặc không có quyền xem trang cá nhân.',
+      );
+    }
+
+    const pageMetadata =
+      await page.evaluate(() => {
+        const ogTitle =
+          document
+            .querySelector<HTMLMetaElement>(
+              'meta[property="og:title"]',
+            )
+            ?.content ||
+          '';
+
+        return {
+          title:
+            ogTitle ||
+            document.title ||
+            'Facebook',
+        };
+      });
+
+    let previousCount = 0;
+    let unchangedRounds = 0;
+
+    for (
+      let round = 0;
+      round < 160;
+      round += 1
+    ) {
+      const currentCount =
+        await page.evaluate(() => {
+          const anchors = Array.from(
+            document.querySelectorAll<HTMLAnchorElement>(
+              'a[href]',
+            ),
+          );
+
+          const keys = new Set<string>();
+
+          for (const anchor of anchors) {
+            try {
+              const parsedUrl =
+                new URL(anchor.href);
+
+              const pathname =
+                parsedUrl.pathname;
+
+              if (
+                pathname.startsWith('/photo')
+              ) {
+                const fbid =
+                  parsedUrl.searchParams.get(
+                    'fbid',
+                  );
+
+                const set =
+                  parsedUrl.searchParams.get(
+                    'set',
+                  );
+
+                if (!fbid) {
+                  continue;
+                }
+
+                if (
+                  set?.startsWith('pcb.')
+                ) {
+                  keys.add(
+                    `album:${set.slice(4)}`,
+                  );
+                } else {
+                  keys.add(
+                    `photo:${fbid}`,
+                  );
+                }
+
+                continue;
+              }
+
+              const reelMatch =
+                pathname.match(
+                  /^\/reel\/(\d+)/,
+                );
+
+              if (reelMatch) {
+                keys.add(
+                  `video:${reelMatch[1]}`,
+                );
+                continue;
+              }
+
+              const videoMatch =
+                pathname.match(
+                  /\/videos\/(\d+)/,
+                );
+
+              if (videoMatch) {
+                keys.add(
+                  `video:${videoMatch[1]}`,
+                );
+              }
+            } catch {
+              // Bỏ qua đường dẫn không hợp lệ.
+            }
+          }
+
+          return keys.size;
+        });
+
+      if (currentCount >= end) {
+        break;
+      }
+
+      if (currentCount === previousCount) {
+        unchangedRounds += 1;
+      } else {
+        previousCount = currentCount;
+        unchangedRounds = 0;
+      }
+
+      if (unchangedRounds >= 8) {
+        break;
+      }
+
+      await page.mouse.wheel(0, 2200);
+      await page.waitForTimeout(1_500);
+    }
+
+    await page.mouse.wheel(0, -1400);
+    await page.waitForTimeout(2_000);
+    await page.mouse.wheel(0, 1400);
+    await page.waitForTimeout(3_000);
+
+    const rawItems =
+      await page.evaluate(() => {
+        const anchors = Array.from(
+          document.querySelectorAll<HTMLAnchorElement>(
+            'a[href]',
+          ),
+        );
+
+        return anchors
+          .map((anchor) => {
+            try {
+              const parsedUrl =
+                new URL(anchor.href);
+
+              const pathname =
+                parsedUrl.pathname;
+
+              const image =
+                anchor.querySelector<HTMLImageElement>(
+                  'img',
+                );
+
+              const title =
+                image?.alt?.trim() ||
+                anchor.getAttribute(
+                  'aria-label',
+                )?.trim() ||
+                anchor.innerText.trim() ||
+                'Bài viết Facebook';
+
+              const thumbnail =
+                image?.currentSrc ||
+                image?.src ||
+                '';
+
+              if (
+                pathname.startsWith('/photo')
+              ) {
+                const fbid =
+                  parsedUrl.searchParams.get(
+                    'fbid',
+                  );
+
+                const set =
+                  parsedUrl.searchParams.get(
+                    'set',
+                  );
+
+                if (!fbid) {
+                  return null;
+                }
+
+                const canonicalUrl =
+                  new URL(
+                    'https://www.facebook.com/photo/',
+                  );
+
+                canonicalUrl.searchParams.set(
+                  'fbid',
+                  fbid,
+                );
+
+                if (set) {
+                  canonicalUrl.searchParams.set(
+                    'set',
+                    set,
+                  );
+                }
+
+                if (
+                  set?.startsWith('pcb.')
+                ) {
+                  return {
+                    key:
+                      `album:${set.slice(4)}`,
+                    id: set.slice(4),
+                    href:
+                      canonicalUrl.toString(),
+                    title,
+                    thumbnail,
+                    mediaType:
+                      'album' as const,
+                  };
+                }
+
+                return {
+                  key: `photo:${fbid}`,
+                  id: fbid,
+                  href:
+                    canonicalUrl.toString(),
+                  title,
+                  thumbnail,
+                  mediaType:
+                    'photo' as const,
+                };
+              }
+
+              const reelMatch =
+                pathname.match(
+                  /^\/reel\/(\d+)/,
+                );
+
+              if (reelMatch) {
+                return {
+                  key:
+                    `video:${reelMatch[1]}`,
+                  id: reelMatch[1],
+                  href:
+                    `https://www.facebook.com/reel/${reelMatch[1]}`,
+                  title,
+                  thumbnail,
+                  mediaType:
+                    'video' as const,
+                };
+              }
+
+              const videoMatch =
+                pathname.match(
+                  /\/videos\/(\d+)/,
+                );
+
+              if (videoMatch) {
+                return {
+                  key:
+                    `video:${videoMatch[1]}`,
+                  id: videoMatch[1],
+                  href:
+                    anchor.href.split('?')[0],
+                  title,
+                  thumbnail,
+                  mediaType:
+                    'video' as const,
+                };
+              }
+
+              return null;
+            } catch {
+              return null;
+            }
+          })
+          .filter(
+            (
+              item,
+            ): item is NonNullable<
+              typeof item
+            > => item !== null,
+          );
+      });
+
+    const uniqueItems = Array.from(
+      new Map(
+        rawItems.map((item) => [
+          item.key,
+          item,
+        ]),
+      ).values(),
+    );
+
+    if (uniqueItems.length === 0) {
+      throw new Error(
+        'Không lấy được danh sách ảnh hoặc video Facebook. Cookie có thể đã hết hạn hoặc Facebook đang yêu cầu xác minh.',
+      );
+    }
+
+    const author =
+      pageMetadata.title
+        .replace(/\s*\|\s*Facebook.*$/i, '')
+        .replace(/\s*-\s*Facebook.*$/i, '')
+        .trim() ||
+      'Facebook';
+
+    return uniqueItems
+      .slice(start - 1, end)
+      .map((item) => ({
+        id: item.id,
+        url: item.href,
+        platform: 'Facebook',
+        title: item.title,
+        author,
+        thumbnail: item.thumbnail,
+        estimatedSize: 0,
+        mediaType: item.mediaType,
+      }));
+  } finally {
+    await browser.close();
   }
 }
 
@@ -974,6 +1634,14 @@ export async function analyzeChannelRange(
 
   if (isTikTokUrl(url)) {
     return analyzeTikTokChannelRange(
+      url,
+      normalizedStart,
+      normalizedEnd,
+    );
+  }
+
+  if (isFacebookUrl(url)) {
+    return analyzeFacebookChannelRange(
       url,
       normalizedStart,
       normalizedEnd,

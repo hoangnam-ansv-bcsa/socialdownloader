@@ -106,6 +106,28 @@ function isInstagramPostUrl(url: string): boolean {
   }
 }
 
+function isFacebookPhotoUrl(url: string): boolean {
+  const hostname = getHostname(url);
+
+  if (
+    hostname !== 'facebook.com' &&
+    !hostname.endsWith('.facebook.com')
+  ) {
+    return false;
+  }
+
+  try {
+    const parsedUrl = new URL(url);
+
+    return (
+      parsedUrl.pathname.startsWith('/photo') &&
+      parsedUrl.searchParams.has('fbid')
+    );
+  } catch {
+    return false;
+  }
+}
+
 function addPlatformArguments(
   args: string[],
   url: string,
@@ -386,6 +408,365 @@ async function loadInstagramBrowserCookies(
       );
   } catch {
     return [];
+  }
+}
+
+async function loadFacebookBrowserCookies(
+  cookiesFile?: string,
+) {
+  const cookiesPath = path.resolve(
+    cookiesFile ||
+      process.env.YT_DLP_COOKIES ||
+      'secrets/cookies.txt',
+  );
+
+  try {
+    const cookieText = await fs.readFile(
+      cookiesPath,
+      'utf8',
+    );
+
+    return cookieText
+      .split(/\r?\n/)
+      .filter((line) => {
+        const trimmed = line.trim();
+
+        return (
+          trimmed.length > 0 &&
+          (
+            !trimmed.startsWith('#') ||
+            trimmed.startsWith('#HttpOnly_')
+          )
+        );
+      })
+      .map((line) => {
+        const parts = line.split('\t');
+
+        if (parts.length < 7) {
+          return null;
+        }
+
+        const [
+          rawDomain,
+          ,
+          cookiePath,
+          secure,
+          expires,
+          name,
+          ...valueParts
+        ] = parts;
+
+        const domain = rawDomain.replace(
+          /^#HttpOnly_/,
+          '',
+        );
+
+        if (!domain.includes('facebook.com')) {
+          return null;
+        }
+
+        return {
+          name,
+          value: valueParts.join('\t'),
+          domain,
+          path: cookiePath || '/',
+          secure: secure === 'TRUE',
+          expires:
+            Number(expires) > 0
+              ? Number(expires)
+              : -1,
+        };
+      })
+      .filter(
+        (
+          cookie,
+        ): cookie is NonNullable<typeof cookie> =>
+          cookie !== null,
+      );
+  } catch {
+    return [];
+  }
+}
+
+async function downloadFacebookPhotoAlbum(
+  options: DownloadMediaOptions,
+): Promise<DownloadResult> {
+  const {
+    url,
+    outputDirectory,
+    fileNameTemplate,
+    cookiesFile,
+    signal,
+    onProgress,
+  } = options;
+
+  await fs.mkdir(outputDirectory, {
+    recursive: true,
+  });
+
+  const baseName = sanitizeFileName(
+    fileNameTemplate || 'facebook_album',
+  );
+
+  const resolvedOutputDirectory =
+    path.resolve(outputDirectory);
+
+  const albumDirectory = path.join(
+    resolvedOutputDirectory,
+    `${baseName}_images`,
+  );
+
+  const zipPath = path.join(
+    resolvedOutputDirectory,
+    `${baseName}.zip`,
+  );
+
+  await fs.rm(albumDirectory, {
+    recursive: true,
+    force: true,
+  });
+
+  await fs.rm(zipPath, {
+    force: true,
+  });
+
+  await fs.mkdir(albumDirectory, {
+    recursive: true,
+  });
+
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--no-sandbox'],
+  });
+
+  try {
+    const context = await browser.newContext({
+      viewport: {
+        width: 1600,
+        height: 1000,
+      },
+    });
+
+    const cookies =
+      await loadFacebookBrowserCookies(
+        cookiesFile,
+      );
+
+    if (cookies.length > 0) {
+      await context.addCookies(cookies);
+    }
+
+    const page = await context.newPage();
+
+    await page.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: 120_000,
+    });
+
+    await page.waitForTimeout(10_000);
+
+    if (page.url().includes('/login/')) {
+      throw new Error(
+        'Cookie Facebook đã hết hạn hoặc không có quyền xem bài viết.',
+      );
+    }
+
+    const collected =
+      new Map<string, string>();
+
+    for (
+      let round = 0;
+      round < 30;
+      round += 1
+    ) {
+      if (signal?.aborted) {
+        throw new Error(
+          'Đã hủy tải album Facebook.',
+        );
+      }
+
+      const imageUrls =
+        await page.evaluate(() =>
+          Array.from(
+            document.querySelectorAll<HTMLImageElement>(
+              'img',
+            ),
+          )
+            .map((image) => ({
+              src:
+                image.currentSrc ||
+                image.src,
+              width: image.naturalWidth,
+              height: image.naturalHeight,
+            }))
+            .filter(
+              (image) =>
+                image.src.includes('scontent') &&
+                image.src.includes('fbcdn.net') &&
+                image.width >= 500 &&
+                image.height >= 500,
+            )
+            .map((image) => image.src),
+        );
+
+      for (const imageUrl of imageUrls) {
+        collected.set(
+          imageUrl.split('?')[0],
+          imageUrl,
+        );
+      }
+
+      const clicked =
+        await page.evaluate(() => {
+          const elements = Array.from(
+            document.querySelectorAll<HTMLElement>(
+              '[aria-label]',
+            ),
+          );
+
+          const next = elements.find(
+            (element) => {
+              const label =
+                element.getAttribute(
+                  'aria-label',
+                ) || '';
+
+              return /next|tiếp|sau/i.test(
+                label,
+              );
+            },
+          );
+
+          if (!next) {
+            return false;
+          }
+
+          next.click();
+          return true;
+        });
+
+      if (!clicked) {
+        break;
+      }
+
+      await page.waitForTimeout(2_000);
+    }
+
+    const imageUrls =
+      Array.from(collected.values());
+
+    if (imageUrls.length === 0) {
+      throw new Error(
+        'Không tìm thấy ảnh trong bài Facebook.',
+      );
+    }
+
+    for (
+      let index = 0;
+      index < imageUrls.length;
+      index += 1
+    ) {
+      if (signal?.aborted) {
+        throw new Error(
+          'Đã hủy tải album Facebook.',
+        );
+      }
+
+      const response =
+        await context.request.get(
+          imageUrls[index],
+          {
+            headers: {
+              Referer: url,
+            },
+            timeout: 120_000,
+          },
+        );
+
+      if (!response.ok()) {
+        throw new Error(
+          `Không tải được ảnh ${index + 1}/${imageUrls.length}: HTTP ${response.status()}.`,
+        );
+      }
+
+      const contentType =
+        response.headers()['content-type'] ||
+        '';
+
+      const extension =
+        contentType.includes('png')
+          ? 'png'
+          : contentType.includes('webp')
+            ? 'webp'
+            : 'jpg';
+
+      const fileName =
+        `${String(index + 1).padStart(3, '0')}.${extension}`;
+
+      await fs.writeFile(
+        path.join(
+          albumDirectory,
+          fileName,
+        ),
+        await response.body(),
+      );
+
+      onProgress?.({
+        percentage:
+          ((index + 1) /
+            imageUrls.length) *
+          90,
+        speed: 'Đang tải ảnh',
+        eta:
+          `${imageUrls.length - index - 1} ảnh`,
+      });
+    }
+
+    onProgress?.({
+      percentage: 95,
+      speed: 'Đang đóng gói ZIP',
+      eta: '--:--',
+    });
+
+    const zipResult = await execa(
+      'zip',
+      ['-r', '-q', zipPath, '.'],
+      {
+        cwd: albumDirectory,
+        reject: false,
+      },
+    );
+
+    if (zipResult.exitCode !== 0) {
+      throw new Error(
+        'Không thể đóng gói album Facebook thành ZIP.',
+      );
+    }
+
+    await fs.rm(albumDirectory, {
+      recursive: true,
+      force: true,
+    });
+
+    onProgress?.({
+      percentage: 100,
+      speed: 'Hoàn tất',
+      eta: '00:00',
+    });
+
+    return {
+      filePath: path.resolve(zipPath),
+      fileName: path.basename(zipPath),
+    };
+  } catch (error) {
+    await fs.rm(albumDirectory, {
+      recursive: true,
+      force: true,
+    });
+
+    throw error;
+  } finally {
+    await browser.close();
   }
 }
 
@@ -909,6 +1290,10 @@ export async function downloadMedia(
 
   if (isInstagramPostUrl(url)) {
     return downloadInstagramPhotoAlbum(options);
+  }
+
+  if (isFacebookPhotoUrl(url)) {
+    return downloadFacebookPhotoAlbum(options);
   }
 
   await fs.mkdir(outputDirectory, {
