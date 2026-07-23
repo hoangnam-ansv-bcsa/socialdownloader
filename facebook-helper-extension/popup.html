@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1"
+  >
+  <title>Facebook Helper</title>
+
+  <style>
+    body {
+      width: 340px;
+      margin: 0;
+      padding: 16px;
+      box-sizing: border-box;
+      font-family: Arial, sans-serif;
+      color: #1f2937;
+      background: #f8fafc;
+    }
+
+    h1 {
+      margin: 0 0 14px;
+      font-size: 18px;
+    }
+
+    label {
+      display: block;
+      margin: 12px 0 5px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    input {
+      width: 100%;
+      padding: 9px 10px;
+      box-sizing: border-box;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+
+    button {
+      width: 100%;
+      margin-top: 14px;
+      padding: 10px;
+      border: 0;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    #saveButton {
+      background: #e2e8f0;
+      color: #0f172a;
+    }
+
+    #sendButton {
+      background: #2563eb;
+      color: white;
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: 0.65;
+    }
+
+    #status {
+      min-height: 38px;
+      margin-top: 12px;
+      padding: 9px;
+      box-sizing: border-box;
+      border-radius: 6px;
+      font-size: 13px;
+      line-height: 19px;
+      background: #e2e8f0;
+    }
+
+    .success {
+      color: #166534;
+      background: #dcfce7 !important;
+    }
+
+    .error {
+      color: #991b1b;
+      background: #fee2e2 !important;
+    }
+
+    .note {
+      margin-top: 10px;
+      font-size: 11px;
+      line-height: 16px;
+      color: #64748b;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>Facebook Helper</h1>
+
+  <label for="backendUrl">
+    Địa chỉ backend
+  </label>
+
+  <input
+    id="backendUrl"
+    type="url"
+    placeholder="https://...app.github.dev"
+    autocomplete="off"
+  >
+
+  <label for="helperKey">
+    Mã ghép nối
+  </label>
+
+  <input
+    id="helperKey"
+    type="password"
+    placeholder="FACEBOOK_HELPER_KEY"
+    autocomplete="off"
+  >
+
+  <button id="saveButton" type="button">
+    Lưu cấu hình
+  </button>
+
+  <button id="sendButton" type="button">
+    Gửi phiên Facebook
+  </button>
+
+  <div id="status">
+    Chưa thực hiện.
+  </div>
+
+  <div class="note">
+    Extension chỉ gửi phiên khi bạn bấm nút.
+    Không hiển thị giá trị cookie.
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

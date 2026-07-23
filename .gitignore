@@ -16,3 +16,4 @@ downloads/
 # Runtime data
 
 # Downloaded media
+.env

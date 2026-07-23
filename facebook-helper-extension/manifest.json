@@ -1,16 +1,22 @@
 {
   "manifest_version": 3,
   "name": "SocialDownloader Facebook Helper",
-  "version": "1.0.0",
-  "description": "Bridge Facebook browser session to SocialDownloader backend",
+  "version": "1.1.0",
+  "description": "Gửi phiên Facebook từ Chrome tới SocialDownloader khi người dùng chủ động yêu cầu",
   "permissions": [
     "cookies",
-    "tabs"
+    "storage"
   ],
   "host_permissions": [
-    "*://*.facebook.com/*"
+    "*://*.facebook.com/*",
+    "http://localhost:3000/*",
+    "https://*.app.github.dev/*"
   ],
   "background": {
     "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Facebook Helper",
+    "default_popup": "popup.html"
   }
 }

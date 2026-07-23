@@ -43,6 +43,27 @@ dotenv.config();
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 
+interface FacebookHelperCookie {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  secure?: boolean;
+  httpOnly?: boolean;
+  sameSite?: string;
+  expirationDate?: number;
+}
+
+interface FacebookBrowserSession {
+  cookies: FacebookHelperCookie[];
+  userAgent?: string;
+  receivedAt: number;
+}
+
+let facebookBrowserSession:
+  | FacebookBrowserSession
+  | null = null;
+
 app.use(express.json({
   limit: '1mb',
 }));
@@ -497,6 +518,162 @@ async function processQueue(): Promise<void> {
     schedulerRunning = false;
   }
 }
+
+app.post(
+  '/api/facebook/session',
+  (req, res) => {
+    res.setHeader(
+      'Cache-Control',
+      'no-store',
+    );
+
+    const configuredKey =
+      process.env.FACEBOOK_HELPER_KEY;
+
+    const providedKey =
+      req.header('x-facebook-helper-key');
+
+    if (
+      !configuredKey ||
+      providedKey !== configuredKey
+    ) {
+      return res.status(401).json({
+        error:
+          'Mã ghép nối Facebook Helper không hợp lệ.',
+      });
+    }
+
+    const body = req.body as {
+      cookies?: unknown;
+      userAgent?: unknown;
+    };
+
+    if (!Array.isArray(body.cookies)) {
+      return res.status(400).json({
+        error:
+          'Danh sách cookie Facebook không hợp lệ.',
+      });
+    }
+
+    const cookies =
+      body.cookies
+        .slice(0, 100)
+        .filter(
+          (
+            item,
+          ): item is Record<
+            string,
+            unknown
+          > =>
+            typeof item === 'object' &&
+            item !== null,
+        )
+        .map((item) => ({
+          name:
+            typeof item.name === 'string'
+              ? item.name
+              : '',
+          value:
+            typeof item.value === 'string'
+              ? item.value
+              : '',
+          domain:
+            typeof item.domain === 'string'
+              ? item.domain
+              : '',
+          path:
+            typeof item.path === 'string'
+              ? item.path
+              : '/',
+          secure:
+            typeof item.secure === 'boolean'
+              ? item.secure
+              : undefined,
+          httpOnly:
+            typeof item.httpOnly ===
+            'boolean'
+              ? item.httpOnly
+              : undefined,
+          sameSite:
+            typeof item.sameSite ===
+            'string'
+              ? item.sameSite
+              : undefined,
+          expirationDate:
+            typeof item.expirationDate ===
+            'number'
+              ? item.expirationDate
+              : undefined,
+        }))
+        .filter(
+          (cookie) =>
+            cookie.name.length > 0 &&
+            cookie.value.length > 0 &&
+            cookie.domain.includes(
+              'facebook.com',
+            ),
+        );
+
+    const cookieNames = new Set(
+      cookies.map(
+        (cookie) => cookie.name,
+      ),
+    );
+
+    if (
+      !cookieNames.has('c_user') ||
+      !cookieNames.has('xs')
+    ) {
+      return res.status(400).json({
+        error:
+          'Phiên Facebook thiếu cookie c_user hoặc xs.',
+      });
+    }
+
+    facebookBrowserSession = {
+      cookies,
+      userAgent:
+        typeof body.userAgent === 'string'
+          ? body.userAgent.slice(0, 500)
+          : undefined,
+      receivedAt: Date.now(),
+    };
+
+    addLog(
+      'info',
+      'FacebookHelper',
+      `Đã nhận phiên Facebook từ trình duyệt (${cookies.length} cookie).`,
+    );
+
+    return res.json({
+      success: true,
+      cookieCount: cookies.length,
+      receivedAt:
+        facebookBrowserSession.receivedAt,
+    });
+  },
+);
+
+app.get(
+  '/api/facebook/session/status',
+  (_req, res) => {
+    res.setHeader(
+      'Cache-Control',
+      'no-store',
+    );
+
+    return res.json({
+      connected:
+        facebookBrowserSession !== null,
+      cookieCount:
+        facebookBrowserSession
+          ?.cookies.length || 0,
+      receivedAt:
+        facebookBrowserSession
+          ?.receivedAt || null,
+    });
+  },
+);
 
 app.get('/api/health', (_req, res) => {
   res.json({
