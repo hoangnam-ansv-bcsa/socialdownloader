@@ -67,7 +67,7 @@ interface ChannelScanSession {
   updatedAt: number;
 }
 
-const CHANNEL_SCAN_BATCH_SIZE = 100;
+const CHANNEL_SCAN_BATCH_SIZE = 200;
 
 const channelScanSessions =
   new Map<string, ChannelScanSession>();
