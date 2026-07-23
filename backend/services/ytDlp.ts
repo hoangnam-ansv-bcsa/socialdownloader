@@ -1,6 +1,7 @@
 import { execa } from 'execa';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { chromium } from 'playwright';
 
 export interface YtDlpMetadata {
   id?: string;
@@ -20,6 +21,7 @@ export interface YtDlpMetadata {
   filesize_approx?: number;
   upload_date?: string;
   ext?: string;
+  photo_count?: number;
 }
 
 export interface DownloadProgress {
@@ -75,6 +77,18 @@ function isTikTokUrl(url: string): boolean {
   );
 }
 
+function isTikTokPhotoUrl(url: string): boolean {
+  if (!isTikTokUrl(url)) {
+    return false;
+  }
+
+  try {
+    return new URL(url).pathname.includes('/photo/');
+  } catch {
+    return false;
+  }
+}
+
 function addPlatformArguments(
   args: string[],
   url: string,
@@ -116,9 +130,132 @@ function parseNumber(value?: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+async function getTikTokPhotoMetadata(
+  url: string,
+): Promise<YtDlpMetadata> {
+  const browser = await chromium.launch({
+    headless: true,
+    args: [
+      '--disable-blink-features=AutomationControlled',
+    ],
+  });
+
+  try {
+    const page = await browser.newPage({
+      viewport: {
+        width: 1600,
+        height: 1000,
+      },
+    });
+
+    await page.goto(url, {
+      waitUntil: 'networkidle',
+      timeout: 120_000,
+    });
+
+    await page.waitForTimeout(10_000);
+
+    const payload = await page.evaluate(() => {
+      const imageEntries = Array.from(document.images)
+        .map((image) => {
+          const htmlImage = image as HTMLImageElement;
+
+          return {
+            src:
+              htmlImage.currentSrc ||
+              htmlImage.src,
+            width:
+              htmlImage.naturalWidth,
+            height:
+              htmlImage.naturalHeight,
+            alt:
+              htmlImage.alt || '',
+          };
+        })
+        .filter((image) =>
+          image.src.includes('photomode'),
+        );
+
+      const uniqueImages = Array.from(
+        new Map(
+          imageEntries.map((image) => [
+            image.src.split('?')[0],
+            image,
+          ]),
+        ).values(),
+      );
+
+      const cleanTitle = document.title
+        .replace(/\s*\|\s*TikTok\s*$/, '')
+        .trim();
+
+      const metaDescription =
+        (
+          document.querySelector(
+            'meta[name="description"]',
+          ) as HTMLMetaElement | null
+        )?.content?.trim() || '';
+
+      return {
+        title: cleanTitle,
+        metaDescription,
+        images: uniqueImages,
+      };
+    });
+
+    if (payload.images.length === 0) {
+      throw new Error(
+        'Không phân tích được bài ảnh TikTok. Trang có thể đang yêu cầu CAPTCHA.',
+      );
+    }
+
+    const idMatch = url.match(
+      /\/photo\/(\d+)/,
+    );
+
+    const authorMatch = url.match(
+      /tiktok\.com\/@([^/?]+)/i,
+    );
+
+    const firstImage = payload.images[0];
+
+    return {
+      id: idMatch?.[1],
+      webpage_url: url,
+      original_url: url,
+      extractor: 'TikTokPhoto',
+      extractor_key: 'TikTokPhoto',
+      title:
+        payload.title ||
+        payload.metaDescription ||
+        'TikTok photo post',
+      uploader: authorMatch?.[1]
+        ? `@${authorMatch[1]}`
+        : 'TikTok',
+      uploader_id: authorMatch?.[1],
+      channel: authorMatch?.[1]
+        ? `@${authorMatch[1]}`
+        : undefined,
+      thumbnail: firstImage.src,
+      width:
+        firstImage.width || undefined,
+      height:
+        firstImage.height || undefined,
+      ext: 'jpg',
+      photo_count: payload.images.length,
+    };
+  } finally {
+    await browser.close();
+  }
+}
+
 export async function getMediaMetadata(
   url: string,
 ): Promise<YtDlpMetadata> {
+  if (isTikTokPhotoUrl(url)) {
+    return getTikTokPhotoMetadata(url);
+  }
+
   const metadataArgs = [
     '--dump-single-json',
     '--skip-download',
@@ -158,6 +295,244 @@ export async function getMediaMetadata(
   return metadata;
 }
 
+async function downloadTikTokPhotoAlbum(
+  options: DownloadMediaOptions,
+): Promise<DownloadResult> {
+  const {
+    url,
+    outputDirectory,
+    fileNameTemplate,
+    signal,
+    onProgress,
+  } = options;
+
+  await fs.mkdir(outputDirectory, {
+    recursive: true,
+  });
+
+  const baseName = sanitizeFileName(
+    fileNameTemplate || 'tiktok_album',
+  );
+
+  const resolvedOutputDirectory =
+    path.resolve(outputDirectory);
+
+  const albumDirectory = path.join(
+    resolvedOutputDirectory,
+    `${baseName}_images`,
+  );
+
+  const zipPath = path.join(
+    resolvedOutputDirectory,
+    `${baseName}.zip`,
+  );
+
+  await fs.rm(albumDirectory, {
+    recursive: true,
+    force: true,
+  });
+
+  await fs.rm(zipPath, {
+    force: true,
+  });
+
+  await fs.mkdir(albumDirectory, {
+    recursive: true,
+  });
+
+  const browser = await chromium.launch({
+    headless: true,
+    args: [
+      '--disable-blink-features=AutomationControlled',
+      '--no-sandbox',
+    ],
+  });
+
+  try {
+    if (signal?.aborted) {
+      throw new Error('Đã hủy tải album.');
+    }
+
+    const context = await browser.newContext({
+      viewport: {
+        width: 1600,
+        height: 1000,
+      },
+    });
+
+    const page = await context.newPage();
+
+    await page.goto(url, {
+      waitUntil: 'networkidle',
+      timeout: 120_000,
+    });
+
+    await page.waitForTimeout(10_000);
+
+    if (signal?.aborted) {
+      throw new Error('Đã hủy tải album.');
+    }
+
+    const rawImageUrls = await page
+      .locator('img')
+      .evaluateAll((images) =>
+        images
+          .map((image) => {
+            const htmlImage =
+              image as HTMLImageElement;
+
+            return (
+              htmlImage.currentSrc ||
+              htmlImage.src
+            );
+          })
+          .filter(
+            (imageUrl) =>
+              imageUrl.includes('photomode') &&
+              (
+                imageUrl.includes('tiktokcdn') ||
+                imageUrl.includes('muscdn')
+              ),
+          ),
+      );
+
+    const imageUrls = Array.from(
+      new Map(
+        rawImageUrls.map((imageUrl) => [
+          imageUrl.split('?')[0],
+          imageUrl,
+        ]),
+      ).values(),
+    );
+
+    if (imageUrls.length === 0) {
+      throw new Error(
+        'Không tìm thấy ảnh trong bài TikTok. Trang có thể đang yêu cầu CAPTCHA.',
+      );
+    }
+
+    for (
+      let index = 0;
+      index < imageUrls.length;
+      index += 1
+    ) {
+      if (signal?.aborted) {
+        throw new Error('Đã hủy tải album.');
+      }
+
+      const imageUrl = imageUrls[index];
+
+      const response = await context.request.get(
+        imageUrl,
+        {
+          headers: {
+            Referer: url,
+          },
+          timeout: 120_000,
+        },
+      );
+
+      if (!response.ok()) {
+        throw new Error(
+          `Không tải được ảnh ${index + 1}/${imageUrls.length}: HTTP ${response.status()}.`,
+        );
+      }
+
+      const contentType =
+        response.headers()['content-type'] ||
+        '';
+
+      const extension =
+        contentType.includes('png')
+          ? 'png'
+          : contentType.includes('webp')
+            ? 'webp'
+            : 'jpg';
+
+      const fileName =
+        `${String(index + 1).padStart(3, '0')}.${extension}`;
+
+      const filePath = path.join(
+        albumDirectory,
+        fileName,
+      );
+
+      await fs.writeFile(
+        filePath,
+        await response.body(),
+      );
+
+      onProgress?.({
+        percentage:
+          ((index + 1) / imageUrls.length) *
+          90,
+        speed: 'Đang tải ảnh',
+        eta:
+          `${imageUrls.length - index - 1} ảnh`,
+      });
+    }
+
+    if (signal?.aborted) {
+      throw new Error('Đã hủy tải album.');
+    }
+
+    onProgress?.({
+      percentage: 95,
+      speed: 'Đang đóng gói ZIP',
+      eta: '--:--',
+    });
+
+    const zipResult = await execa(
+      'zip',
+      [
+        '-q',
+        '-r',
+        zipPath,
+        '.',
+      ],
+      {
+        cwd: albumDirectory,
+        cancelSignal: signal,
+        reject: false,
+      },
+    );
+
+    if (zipResult.exitCode !== 0) {
+      throw new Error(
+        zipResult.stderr ||
+        'Không thể đóng gói album thành file ZIP.',
+      );
+    }
+
+    await fs.access(zipPath);
+
+    await fs.rm(albumDirectory, {
+      recursive: true,
+      force: true,
+    });
+
+    onProgress?.({
+      percentage: 100,
+      speed: 'Hoàn tất',
+      eta: '00:00',
+    });
+
+    return {
+      filePath: path.resolve(zipPath),
+      fileName: path.basename(zipPath),
+    };
+  } catch (error) {
+    await fs.rm(albumDirectory, {
+      recursive: true,
+      force: true,
+    });
+
+    throw error;
+  } finally {
+    await browser.close();
+  }
+}
+
 export async function downloadMedia(
   options: DownloadMediaOptions,
 ): Promise<DownloadResult> {
@@ -170,6 +545,10 @@ export async function downloadMedia(
     signal,
     onProgress,
   } = options;
+
+  if (isTikTokPhotoUrl(url)) {
+    return downloadTikTokPhotoAlbum(options);
+  }
 
   await fs.mkdir(outputDirectory, {
     recursive: true,

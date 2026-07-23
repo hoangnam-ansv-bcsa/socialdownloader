@@ -984,7 +984,14 @@ app.post('/api/analyze', async (req, res) => {
         thumbnail:
           metadata.thumbnail ||
           '',
-        mediaType: 'video',
+        mediaType:
+          typeof metadata.photo_count === 'number'
+            ? metadata.photo_count > 1
+              ? 'album'
+              : 'photo'
+            : url.includes('/photo/')
+              ? 'photo'
+              : 'video',
         publishDate: formatPublishDate(
           metadata.upload_date,
         ),
