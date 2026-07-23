@@ -26,6 +26,12 @@ import {
 } from './backend/services/ytDlp';
 
 import {
+  analyzeChannel,
+  analyzeChannelRange,
+  type AnalyzeResult,
+} from './backend/services/analyzeService';
+
+import {
   MediaItem,
   DashboardStats,
   PlatformType,
@@ -42,6 +48,28 @@ app.use(express.json({
 
 const activeDownloads = new Map<string, AbortController>();
 let schedulerRunning = false;
+
+type ChannelScanStatus =
+  | 'scanning'
+  | 'completed'
+  | 'stopped'
+  | 'failed';
+
+interface ChannelScanSession {
+  id: string;
+  url: string;
+  status: ChannelScanStatus;
+  items: MediaItem[];
+  error?: string;
+  stopRequested: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+const CHANNEL_SCAN_BATCH_SIZE = 100;
+
+const channelScanSessions =
+  new Map<string, ChannelScanSession>();
 
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => {
@@ -116,6 +144,125 @@ function detectPlatform(
   if (source.includes('pinterest')) return 'Pinterest';
 
   return 'YouTube';
+}
+
+function mapChannelResultToMediaItem(
+  result: AnalyzeResult,
+): MediaItem {
+  return {
+    id: result.id,
+    url: result.url,
+    platform: detectPlatform(
+      result.platform,
+      result.platform,
+    ),
+    title: result.title,
+    author: result.author,
+    thumbnail: result.thumbnail,
+    mediaType: result.mediaType,
+    publishDate:
+      result.publishDate ||
+      new Date().toLocaleDateString('vi-VN'),
+    duration: result.duration,
+    resolution:
+      result.resolution ||
+      'Tự động',
+    estimatedSize: result.estimatedSize,
+    status: 'ready',
+    progress: 0,
+    selected: true,
+  };
+}
+
+async function runChannelScan(
+  sessionId: string,
+): Promise<void> {
+  const session = channelScanSessions.get(
+    sessionId,
+  );
+
+  if (!session) {
+    return;
+  }
+
+  try {
+    while (!session.stopRequested) {
+      const start = session.items.length + 1;
+      const end =
+        start + CHANNEL_SCAN_BATCH_SIZE - 1;
+
+      addLog(
+        'info',
+        'ChannelScanner',
+        `Đang quét bài ${start}-${end}.`,
+      );
+
+      const results = await analyzeChannelRange(
+        session.url,
+        start,
+        end,
+      );
+
+      if (session.stopRequested) {
+        session.status = 'stopped';
+        session.updatedAt = Date.now();
+        return;
+      }
+
+      const existingIds = new Set(
+        session.items.map((item) => item.id),
+      );
+
+      const newItems = results
+        .map(mapChannelResultToMediaItem)
+        .filter(
+          (item) => !existingIds.has(item.id),
+        );
+
+      session.items.push(...newItems);
+      session.updatedAt = Date.now();
+
+      addLog(
+        'info',
+        'ChannelScanner',
+        `Đã quét được ${session.items.length} bài.`,
+      );
+
+      if (
+        results.length < CHANNEL_SCAN_BATCH_SIZE ||
+        newItems.length === 0
+      ) {
+        session.status = 'completed';
+        session.updatedAt = Date.now();
+
+        addLog(
+          'info',
+          'ChannelScanner',
+          `Hoàn tất quét ${session.items.length} bài công khai.`,
+        );
+
+        return;
+      }
+    }
+
+    session.status = 'stopped';
+    session.updatedAt = Date.now();
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : String(error);
+
+    session.status = 'failed';
+    session.error = message;
+    session.updatedAt = Date.now();
+
+    addLog(
+      'error',
+      'ChannelScanner',
+      message,
+    );
+  }
 }
 
 function sanitizeTemplateValue(
@@ -566,6 +713,217 @@ app.post('/api/queue/clear-completed', (_req, res) => {
     success: true,
     queue,
   });
+});
+
+app.post('/api/channel/scan/start', (req, res) => {
+  const { url } = req.body as {
+    url?: string;
+  };
+
+  const cleanUrl = url?.trim();
+
+  if (
+    !cleanUrl ||
+    !/^https?:\/\//i.test(cleanUrl)
+  ) {
+    return res.status(400).json({
+      error:
+        'Link kênh hoặc tài khoản không hợp lệ.',
+    });
+  }
+
+  const sessionId = crypto.randomUUID();
+
+  const session: ChannelScanSession = {
+    id: sessionId,
+    url: cleanUrl,
+    status: 'scanning',
+    items: [],
+    stopRequested: false,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+
+  channelScanSessions.set(
+    sessionId,
+    session,
+  );
+
+  addLog(
+    'info',
+    'ChannelScanner',
+    'Đã bắt đầu phiên quét nền.',
+  );
+
+  void runChannelScan(sessionId);
+
+  return res.json({
+    sessionId,
+    status: session.status,
+    batchSize: CHANNEL_SCAN_BATCH_SIZE,
+  });
+});
+
+app.get('/api/channel/scan/:id', (req, res) => {
+  const session = channelScanSessions.get(
+    req.params.id,
+  );
+
+  if (!session) {
+    return res.status(404).json({
+      error: 'Không tìm thấy phiên quét.',
+    });
+  }
+
+  const rawAfter = Number(req.query.after);
+
+  const after =
+    Number.isFinite(rawAfter) && rawAfter > 0
+      ? Math.floor(rawAfter)
+      : 0;
+
+  return res.json({
+    sessionId: session.id,
+    status: session.status,
+    totalLoaded: session.items.length,
+    items: session.items.slice(after),
+    error: session.error,
+    updatedAt: session.updatedAt,
+  });
+});
+
+app.post('/api/channel/scan/:id/stop', (req, res) => {
+  const session = channelScanSessions.get(
+    req.params.id,
+  );
+
+  if (!session) {
+    return res.status(404).json({
+      error: 'Không tìm thấy phiên quét.',
+    });
+  }
+
+  session.stopRequested = true;
+
+  if (session.status === 'scanning') {
+    session.status = 'stopped';
+  }
+
+  session.updatedAt = Date.now();
+
+  addLog(
+    'warning',
+    'ChannelScanner',
+    `Đã yêu cầu dừng tại ${session.items.length} bài.`,
+  );
+
+  return res.json({
+    success: true,
+    status: session.status,
+    totalLoaded: session.items.length,
+  });
+});
+
+app.post('/api/channel/analyze', async (req, res) => {
+  const {
+    url,
+    limit,
+  } = req.body as {
+    url?: string;
+    limit?: number;
+  };
+
+  const cleanUrl = url?.trim();
+
+  if (
+    !cleanUrl ||
+    !/^https?:\/\//i.test(cleanUrl)
+  ) {
+    return res.status(400).json({
+      error: 'Link kênh hoặc tài khoản không hợp lệ.',
+    });
+  }
+
+  const normalizedLimit =
+    typeof limit === 'number' &&
+    Number.isFinite(limit) &&
+    limit > 0
+      ? Math.floor(limit)
+      : undefined;
+
+  addLog(
+    'info',
+    'ChannelAnalyzer',
+    normalizedLimit
+      ? `Đang quét tối đa ${normalizedLimit} bài từ kênh.`
+      : 'Đang quét toàn bộ bài công khai từ kênh.',
+  );
+
+  try {
+    const results = await analyzeChannel(
+      cleanUrl,
+      normalizedLimit,
+    );
+
+    if (results.length === 0) {
+      return res.status(404).json({
+        error:
+          'Không tìm thấy bài đăng công khai nào trong kênh.',
+      });
+    }
+
+    const items: MediaItem[] = results.map(
+      (result): MediaItem => ({
+        id: result.id,
+        url: result.url,
+        platform:
+          detectPlatform(
+            result.platform,
+            result.platform,
+          ),
+        title: result.title,
+        author: result.author,
+        thumbnail: result.thumbnail,
+        mediaType: result.mediaType,
+        publishDate:
+          result.publishDate ||
+          new Date().toLocaleDateString('vi-VN'),
+        duration: result.duration,
+        resolution:
+          result.resolution ||
+          'Tự động',
+        estimatedSize:
+          result.estimatedSize,
+        status: 'ready',
+        progress: 0,
+        selected: true,
+      }),
+    );
+
+    addLog(
+      'info',
+      'ChannelAnalyzer',
+      `Đã tìm thấy ${items.length} bài công khai.`,
+    );
+
+    return res.json(items);
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : String(error);
+
+    addLog(
+      'error',
+      'ChannelAnalyzer',
+      message,
+    );
+
+    return res.status(500).json({
+      error:
+        'Không quét được kênh. Hãy kiểm tra liên kết, quyền truy cập hoặc cookie.',
+    });
+  }
 });
 
 app.post('/api/analyze', async (req, res) => {

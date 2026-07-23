@@ -23,6 +23,10 @@ export const Downloader: React.FC = () => {
     updateSettings,
     isAnalyzing,
     analyzedItems,
+    analyzeChannel,
+    stopChannelScan,
+    channelScanStatus,
+    channelScanTotalLoaded,
     analyzeUrls,
     toggleAnalyzedSelection,
     toggleAllAnalyzedSelection,
@@ -54,19 +58,26 @@ export const Downloader: React.FC = () => {
   const selectedItems = analyzedItems.filter((item) => item.selected);
   const isAllSelected = analyzedItems.length > 0 && selectedItems.length === analyzedItems.length;
 
-  // Handle Fetching creator publications ("Tải hàng loạt")
+  // Quét toàn bộ bài công khai từ link kênh hoặc tài khoản.
   const handleFetchCreatorData = () => {
-    if (!username.trim()) return;
+    const rawValue = username.trim();
 
-    // Simulate scraping a channel/user profile by generating representative links
-    const mockUrls = [
-      `https://www.tiktok.com/@${username}/video/${Math.floor(Math.random() * 900000) + 100000}`,
-      `https://www.tiktok.com/@${username}/video/${Math.floor(Math.random() * 900000) + 100000}`,
-      `https://www.tiktok.com/@${username}/video/${Math.floor(Math.random() * 900000) + 100000}`,
-      `https://www.instagram.com/reel/${Math.random().toString(36).substring(2, 9)}`,
-      `https://www.instagram.com/p/${Math.random().toString(36).substring(2, 9)}`,
-    ];
-    analyzeUrls(mockUrls);
+    if (!rawValue) {
+      return;
+    }
+
+    let channelUrl = rawValue;
+
+    if (!/^https?:\/\//i.test(channelUrl)) {
+      const normalizedUsername = channelUrl.startsWith('@')
+        ? channelUrl
+        : `@${channelUrl}`;
+
+      channelUrl = `https://www.tiktok.com/${normalizedUsername}`;
+    }
+
+    setCurrentPage(1);
+    analyzeChannel(channelUrl);
   };
 
   // Handle Multi URLs Paste
@@ -173,14 +184,18 @@ export const Downloader: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
             <div className="md:col-span-5 space-y-1.5">
               <label className="text-xs font-bold text-slate-300">
-                {isVi ? 'Tên người dùng hoặc Kênh' : 'Username / Channel link'}{' '}
+                {isVi ? 'Link kênh hoặc tên người dùng' : 'Channel link or username'}{' '}
                 <span className="text-rose-500">*</span>
               </label>
               <input
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                placeholder={isVi ? 'Nhập tên người dùng (ví dụ: @hoangnam)' : 'Enter username or channel handle'}
+                placeholder={
+                  isVi
+                    ? 'Ví dụ: https://www.tiktok.com/@tenkenh hoặc @tenkenh'
+                    : 'Example: https://www.tiktok.com/@channel or @channel'
+                }
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-all font-mono"
               />
             </div>
@@ -192,9 +207,16 @@ export const Downloader: React.FC = () => {
               </label>
               <input
                 type="number"
+                min={0}
                 value={intervalSecs}
                 onChange={(e) => setIntervalSecs(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono"
+                disabled
+                title={
+                  isVi
+                    ? 'Tùy chọn khoảng nghỉ sẽ được áp dụng ở bước tải hàng loạt.'
+                    : 'Request delay will be applied during the batch download step.'
+                }
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-500 focus:outline-none font-mono disabled:opacity-60"
               />
             </div>
 
@@ -369,10 +391,47 @@ export const Downloader: React.FC = () => {
 
       {/* Discovery Table mirroring the provided screenshot layout */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
-        <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900">
-          <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
-            {isVi ? 'Kết quả phân tích liên kết' : 'Media Discovery list'}
-          </span>
+        <div className="p-4 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-slate-900">
+          <div className="space-y-1">
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
+              {isVi ? 'Kết quả phân tích liên kết' : 'Media Discovery list'}
+            </span>
+
+            {channelScanStatus !== 'idle' && (
+              <div className="flex items-center gap-2 text-[11px]">
+                {channelScanStatus === 'scanning' && (
+                  <span className="animate-spin rounded-full h-3 w-3 border-2 border-blue-500 border-t-transparent" />
+                )}
+
+                <span className="text-slate-400">
+                  {channelScanStatus === 'scanning'
+                    ? isVi
+                      ? `Đang quét nền — đã lấy ${channelScanTotalLoaded} bài`
+                      : `Scanning in background — ${channelScanTotalLoaded} items loaded`
+                    : channelScanStatus === 'completed'
+                      ? isVi
+                        ? `Đã quét xong ${channelScanTotalLoaded} bài`
+                        : `Completed — ${channelScanTotalLoaded} items`
+                      : channelScanStatus === 'stopped'
+                        ? isVi
+                          ? `Đã dừng tại ${channelScanTotalLoaded} bài`
+                          : `Stopped at ${channelScanTotalLoaded} items`
+                        : isVi
+                          ? 'Quét kênh bị lỗi'
+                          : 'Channel scan failed'}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {channelScanStatus === 'scanning' && (
+            <button
+              onClick={() => void stopChannelScan()}
+              className="text-xs text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/15 border border-rose-500/20 px-3 py-1.5 rounded-lg transition-colors cursor-pointer"
+            >
+              {isVi ? 'Dừng quét' : 'Stop Scan'}
+            </button>
+          )}
         </div>
 
         <div className="overflow-x-auto">
@@ -530,6 +589,7 @@ export const Downloader: React.FC = () => {
                   <option value={10}>10 / {isVi ? 'trang' : 'page'}</option>
                   <option value={20}>20 / {isVi ? 'trang' : 'page'}</option>
                   <option value={50}>50 / {isVi ? 'trang' : 'page'}</option>
+                  <option value={100}>100 / {isVi ? 'trang' : 'page'}</option>
                 </select>
               </div>
             </div>

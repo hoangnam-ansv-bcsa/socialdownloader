@@ -1,6 +1,15 @@
 import { create } from 'zustand';
 import { MediaItem, AppSettings, LogEntry, DashboardStats, PlatformType } from '../types';
 
+let channelScanPollTimer: ReturnType<typeof setTimeout> | null = null;
+
+type ChannelScanStatus =
+  | 'idle'
+  | 'scanning'
+  | 'completed'
+  | 'stopped'
+  | 'failed';
+
 interface AppStoreState {
   activeTab: 'dashboard' | 'queue' | 'downloader' | 'media' | 'history' | 'logs' | 'settings' | 'about';
   settings: AppSettings | null;
@@ -10,6 +19,10 @@ interface AppStoreState {
   stats: DashboardStats | null;
   analyzedItems: MediaItem[];
   isAnalyzing: boolean;
+  channelScanSessionId: string | null;
+  channelScanStatus: ChannelScanStatus;
+  channelScanTotalLoaded: number;
+  channelScanError: string | null;
   urlInput: string;
   searchQuery: string;
   selectedPlatformFilter: PlatformType | 'All';
@@ -33,6 +46,8 @@ interface AppStoreState {
   queueAction: (id: string, action: 'pause' | 'resume' | 'cancel' | 'delete' | 'restart') => Promise<void>;
   clearCompletedQueue: () => Promise<void>;
   fetchStats: () => Promise<void>;
+  analyzeChannel: (url: string, limit?: number) => Promise<void>;
+  stopChannelScan: () => Promise<void>;
   analyzeUrls: (urls: string[]) => Promise<void>;
   toggleAnalyzedSelection: (id: string) => void;
   toggleAllAnalyzedSelection: (checked: boolean) => void;
@@ -48,6 +63,10 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
   stats: null,
   analyzedItems: [],
   isAnalyzing: false,
+  channelScanSessionId: null,
+  channelScanStatus: 'idle',
+  channelScanTotalLoaded: 0,
+  channelScanError: null,
   urlInput: '',
   searchQuery: '',
   selectedPlatformFilter: 'All',
@@ -207,6 +226,261 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     }
   },
 
+  analyzeChannel: async (url) => {
+    if (channelScanPollTimer) {
+      clearTimeout(channelScanPollTimer);
+      channelScanPollTimer = null;
+    }
+
+    set({
+      isAnalyzing: true,
+      analyzedItems: [],
+      channelScanSessionId: null,
+      channelScanStatus: 'scanning',
+      channelScanTotalLoaded: 0,
+      channelScanError: null,
+    });
+
+    try {
+      const startResponse = await fetch(
+        '/api/channel/scan/start',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ url }),
+        },
+      );
+
+      const startData: unknown =
+        await startResponse.json();
+
+      if (!startResponse.ok) {
+        const message =
+          typeof startData === 'object' &&
+          startData !== null &&
+          'error' in startData &&
+          typeof startData.error === 'string'
+            ? startData.error
+            : 'Không thể bắt đầu quét kênh.';
+
+        throw new Error(message);
+      }
+
+      if (
+        typeof startData !== 'object' ||
+        startData === null ||
+        !('sessionId' in startData) ||
+        typeof startData.sessionId !== 'string'
+      ) {
+        throw new Error(
+          'Máy chủ không trả về mã phiên quét hợp lệ.',
+        );
+      }
+
+      const sessionId = startData.sessionId;
+
+      set({
+        channelScanSessionId: sessionId,
+      });
+
+      const poll = async (): Promise<void> => {
+        const currentState = get();
+
+        if (
+          currentState.channelScanSessionId !== sessionId
+        ) {
+          return;
+        }
+
+        try {
+          const after =
+            currentState.analyzedItems.length;
+
+          const response = await fetch(
+            `/api/channel/scan/${sessionId}?after=${after}`,
+          );
+
+          const data: unknown = await response.json();
+
+          if (!response.ok) {
+            const message =
+              typeof data === 'object' &&
+              data !== null &&
+              'error' in data &&
+              typeof data.error === 'string'
+                ? data.error
+                : 'Không đọc được tiến độ quét kênh.';
+
+            throw new Error(message);
+          }
+
+          if (
+            typeof data !== 'object' ||
+            data === null
+          ) {
+            throw new Error(
+              'Dữ liệu tiến độ quét không hợp lệ.',
+            );
+          }
+
+          const items =
+            'items' in data &&
+            Array.isArray(data.items)
+              ? data.items as MediaItem[]
+              : [];
+
+          const status =
+            'status' in data &&
+            typeof data.status === 'string'
+              ? data.status as ChannelScanStatus
+              : 'scanning';
+
+          const totalLoaded =
+            'totalLoaded' in data &&
+            typeof data.totalLoaded === 'number'
+              ? data.totalLoaded
+              : after + items.length;
+
+          set((state) => {
+            const existingIds = new Set(
+              state.analyzedItems.map(
+                (item) => item.id,
+              ),
+            );
+
+            const newItems = items
+              .filter(
+                (item) =>
+                  !existingIds.has(item.id),
+              )
+              .map((item) => ({
+                ...item,
+                selected: true,
+              }));
+
+            return {
+              analyzedItems: [
+                ...state.analyzedItems,
+                ...newItems,
+              ],
+              isAnalyzing:
+                status === 'scanning' &&
+                state.analyzedItems.length +
+                  newItems.length ===
+                  0,
+              channelScanStatus: status,
+              channelScanTotalLoaded: totalLoaded,
+              channelScanError:
+                'error' in data &&
+                typeof data.error === 'string'
+                  ? data.error
+                  : null,
+            };
+          });
+
+          if (status === 'scanning') {
+            channelScanPollTimer = setTimeout(
+              () => {
+                void poll();
+              },
+              2000,
+            );
+          } else {
+            channelScanPollTimer = null;
+
+            set({
+              isAnalyzing: false,
+            });
+
+            if (status === 'failed') {
+              const message =
+                'error' in data &&
+                typeof data.error === 'string'
+                  ? data.error
+                  : 'Quét kênh bị lỗi.';
+
+              alert(message);
+            }
+          }
+        } catch (error) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : 'Không đọc được tiến độ quét.';
+
+          console.error(
+            'Failed to poll channel scan:',
+            message,
+          );
+
+          set({
+            isAnalyzing: false,
+            channelScanStatus: 'failed',
+            channelScanError: message,
+          });
+
+          channelScanPollTimer = null;
+          alert(message);
+        }
+      };
+
+      void poll();
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Không thể bắt đầu quét kênh.';
+
+      console.error(
+        'Failed to start channel scan:',
+        message,
+      );
+
+      set({
+        isAnalyzing: false,
+        channelScanStatus: 'failed',
+        channelScanError: message,
+      });
+
+      alert(message);
+    }
+  },
+
+  stopChannelScan: async () => {
+    const sessionId =
+      get().channelScanSessionId;
+
+    if (!sessionId) {
+      return;
+    }
+
+    try {
+      await fetch(
+        `/api/channel/scan/${sessionId}/stop`,
+        {
+          method: 'POST',
+        },
+      );
+    } catch (error) {
+      console.error(
+        'Failed to stop channel scan:',
+        error,
+      );
+    }
+
+    if (channelScanPollTimer) {
+      clearTimeout(channelScanPollTimer);
+      channelScanPollTimer = null;
+    }
+
+    set({
+      isAnalyzing: false,
+      channelScanStatus: 'stopped',
+    });
+  },
+
   analyzeUrls: async (urls) => {
     set({
       isAnalyzing: true,
@@ -283,5 +557,19 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     }));
   },
 
-  clearAnalyzedItems: () => set({ analyzedItems: [] }),
+  clearAnalyzedItems: () => {
+    if (channelScanPollTimer) {
+      clearTimeout(channelScanPollTimer);
+      channelScanPollTimer = null;
+    }
+
+    set({
+      analyzedItems: [],
+      isAnalyzing: false,
+      channelScanSessionId: null,
+      channelScanStatus: 'idle',
+      channelScanTotalLoaded: 0,
+      channelScanError: null,
+    });
+  },
 }));
