@@ -26,6 +26,7 @@ import {
 } from './backend/services/ytDlp';
 
 import {
+  analyzeUrl,
   analyzeChannel,
   analyzeChannelRange,
   type AnalyzeResult,
@@ -959,53 +960,18 @@ app.post('/api/analyze', async (req, res) => {
 
   const results = await Promise.allSettled(
     validUrls.map(async (url): Promise<MediaItem> => {
-      const metadata = await getMediaMetadata(url);
+      const analyzed = await analyzeUrl(url);
 
       return {
-        id:
-          metadata.id ||
-          crypto.randomUUID(),
-        url:
-          metadata.webpage_url ||
-          metadata.original_url ||
-          url,
-        platform: detectPlatform(
-          metadata.extractor,
-          metadata.extractor_key,
-        ),
-        title:
-          metadata.title ||
-          'Không có tiêu đề',
-        author:
-          metadata.uploader ||
-          metadata.channel ||
-          metadata.uploader_id ||
-          'Không xác định',
-        thumbnail:
-          metadata.thumbnail ||
-          '',
-        mediaType:
-          typeof metadata.photo_count === 'number'
-            ? metadata.photo_count > 1
-              ? 'album'
-              : 'photo'
-            : url.includes('/photo/')
-              ? 'photo'
-              : 'video',
-        publishDate: formatPublishDate(
-          metadata.upload_date,
-        ),
-        duration: formatDuration(
-          metadata.duration,
-        ),
+        ...analyzed,
+        platform:
+          analyzed.platform as PlatformType,
         resolution:
-          metadata.height
-            ? `${metadata.height}p`
-            : 'Tự động',
-        estimatedSize:
-          metadata.filesize ||
-          metadata.filesize_approx ||
-          0,
+          analyzed.resolution ||
+          'Tự động',
+        publishDate:
+          analyzed.publishDate ||
+          '',
         status: 'ready',
         progress: 0,
         selected: true,

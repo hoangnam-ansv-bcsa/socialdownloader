@@ -76,6 +76,23 @@ function isYouTubeUrl(url: string): boolean {
   );
 }
 
+function isInstagramPostUrl(url: string): boolean {
+  const hostname = getHostname(url);
+
+  if (
+    hostname !== 'instagram.com' &&
+    !hostname.endsWith('.instagram.com')
+  ) {
+    return false;
+  }
+
+  try {
+    return new URL(url).pathname.startsWith('/p/');
+  } catch {
+    return false;
+  }
+}
+
 function addPlatformArguments(
   args: string[],
   url: string,
@@ -326,9 +343,224 @@ function mapEntry(
   };
 }
 
+async function loadInstagramBrowserCookies() {
+  const cookiesPath = path.resolve(
+    process.env.YT_DLP_COOKIES ||
+      'secrets/cookies.txt',
+  );
+
+  try {
+    const cookieText = await fs.readFile(
+      cookiesPath,
+      'utf8',
+    );
+
+    return cookieText
+      .split(/\r?\n/)
+      .filter((line) => {
+        const trimmed = line.trim();
+
+        return (
+          trimmed.length > 0 &&
+          (
+            !trimmed.startsWith('#') ||
+            trimmed.startsWith('#HttpOnly_')
+          )
+        );
+      })
+      .map((line) => {
+        const parts = line.split('\t');
+
+        if (parts.length < 7) {
+          return null;
+        }
+
+        const [
+          rawDomain,
+          ,
+          cookiePath,
+          secure,
+          expires,
+          name,
+          ...valueParts
+        ] = parts;
+
+        const domain = rawDomain.replace(
+          /^#HttpOnly_/,
+          '',
+        );
+
+        if (!domain.includes('instagram.com')) {
+          return null;
+        }
+
+        return {
+          name,
+          value: valueParts.join('\t'),
+          domain,
+          path: cookiePath || '/',
+          secure: secure === 'TRUE',
+          expires:
+            Number(expires) > 0
+              ? Number(expires)
+              : -1,
+        };
+      })
+      .filter(
+        (
+          cookie,
+        ): cookie is NonNullable<typeof cookie> =>
+          cookie !== null,
+      );
+  } catch {
+    return [];
+  }
+}
+
+async function analyzeInstagramPost(
+  url: string,
+): Promise<AnalyzeResult> {
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--no-sandbox'],
+  });
+
+  try {
+    const context = await browser.newContext({
+      viewport: {
+        width: 1600,
+        height: 1000,
+      },
+    });
+
+    const cookies =
+      await loadInstagramBrowserCookies();
+
+    if (cookies.length > 0) {
+      await context.addCookies(cookies);
+    }
+
+    const page = await context.newPage();
+
+    await page.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: 120_000,
+    });
+
+    await page.waitForTimeout(8_000);
+
+    const data = await page.evaluate(() => {
+      const images = Array.from(
+        document.querySelectorAll<HTMLImageElement>(
+          'img',
+        ),
+      )
+        .filter(
+          (image) =>
+            (
+              image.currentSrc ||
+              image.src
+            ).includes('cdninstagram.com') &&
+            image.naturalWidth >= 500 &&
+            image.naturalHeight >= 500,
+        )
+        .map((image) => ({
+          src: image.currentSrc || image.src,
+          alt: image.alt || '',
+        }));
+
+      const metaDescription =
+        document
+          .querySelector<HTMLMetaElement>(
+            'meta[property="og:description"]',
+          )
+          ?.content ||
+        document
+          .querySelector<HTMLMetaElement>(
+            'meta[name="description"]',
+          )
+          ?.content ||
+        '';
+
+      const ogTitle =
+        document
+          .querySelector<HTMLMetaElement>(
+            'meta[property="og:title"]',
+          )
+          ?.content ||
+        '';
+
+      return {
+        images,
+        metaDescription,
+        ogTitle,
+        title: document.title,
+        body: document.body.innerText,
+      };
+    });
+
+    if (data.images.length === 0) {
+      throw new Error(
+        'Không tìm thấy ảnh trong bài Instagram.',
+      );
+    }
+
+    const idMatch = url.match(
+      /instagram\.com\/p\/([^/?]+)/i,
+    );
+
+    const authorMatch =
+      data.ogTitle.match(
+        /^(.+?)\s+on Instagram/i,
+      ) ||
+      data.metaDescription.match(
+        /from\s+([^\s:]+)\s+on Instagram/i,
+      );
+
+    const author =
+      authorMatch?.[1]?.trim() ||
+      'Instagram';
+
+    const firstImage = data.images[0];
+
+    const uniqueImageCount = new Set(
+      data.images.map(
+        (image) =>
+          image.src.split('?')[0],
+      ),
+    ).size;
+
+    return {
+      id:
+        idMatch?.[1] ||
+        randomUUID(),
+      url,
+      platform: 'Instagram',
+      title:
+        data.metaDescription ||
+        data.ogTitle ||
+        data.title ||
+        'Bài viết Instagram',
+      author,
+      thumbnail: firstImage.src,
+      estimatedSize: 0,
+      mediaType:
+        uniqueImageCount > 1
+          ? 'album'
+          : 'photo',
+    };
+  } finally {
+    await browser.close();
+  }
+}
+
 export async function analyzeUrl(
   url: string,
 ): Promise<AnalyzeResult> {
+  if (isInstagramPostUrl(url)) {
+    return analyzeInstagramPost(url);
+  }
+
   const args: string[] = [
     '--dump-single-json',
     '--skip-download',

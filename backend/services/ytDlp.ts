@@ -89,6 +89,23 @@ function isTikTokPhotoUrl(url: string): boolean {
   }
 }
 
+function isInstagramPostUrl(url: string): boolean {
+  const hostname = getHostname(url);
+
+  if (
+    hostname !== 'instagram.com' &&
+    !hostname.endsWith('.instagram.com')
+  ) {
+    return false;
+  }
+
+  try {
+    return new URL(url).pathname.startsWith('/p/');
+  } catch {
+    return false;
+  }
+}
+
 function addPlatformArguments(
   args: string[],
   url: string,
@@ -293,6 +310,346 @@ export async function getMediaMetadata(
   }
 
   return metadata;
+}
+
+async function loadInstagramBrowserCookies(
+  cookiesFile?: string,
+) {
+  const cookiesPath = path.resolve(
+    cookiesFile ||
+      process.env.YT_DLP_COOKIES ||
+      'secrets/cookies.txt',
+  );
+
+  try {
+    const cookieText = await fs.readFile(
+      cookiesPath,
+      'utf8',
+    );
+
+    return cookieText
+      .split(/\r?\n/)
+      .filter((line) => {
+        const trimmed = line.trim();
+
+        return (
+          trimmed.length > 0 &&
+          (
+            !trimmed.startsWith('#') ||
+            trimmed.startsWith('#HttpOnly_')
+          )
+        );
+      })
+      .map((line) => {
+        const parts = line.split('\t');
+
+        if (parts.length < 7) {
+          return null;
+        }
+
+        const [
+          rawDomain,
+          ,
+          cookiePath,
+          secure,
+          expires,
+          name,
+          ...valueParts
+        ] = parts;
+
+        const domain = rawDomain.replace(
+          /^#HttpOnly_/,
+          '',
+        );
+
+        if (!domain.includes('instagram.com')) {
+          return null;
+        }
+
+        return {
+          name,
+          value: valueParts.join('\t'),
+          domain,
+          path: cookiePath || '/',
+          secure: secure === 'TRUE',
+          expires:
+            Number(expires) > 0
+              ? Number(expires)
+              : -1,
+        };
+      })
+      .filter(
+        (
+          cookie,
+        ): cookie is NonNullable<typeof cookie> =>
+          cookie !== null,
+      );
+  } catch {
+    return [];
+  }
+}
+
+async function downloadInstagramPhotoAlbum(
+  options: DownloadMediaOptions,
+): Promise<DownloadResult> {
+  const {
+    url,
+    outputDirectory,
+    fileNameTemplate,
+    cookiesFile,
+    signal,
+    onProgress,
+  } = options;
+
+  await fs.mkdir(outputDirectory, {
+    recursive: true,
+  });
+
+  const baseName = sanitizeFileName(
+    fileNameTemplate || 'instagram_album',
+  );
+
+  const resolvedOutputDirectory =
+    path.resolve(outputDirectory);
+
+  const albumDirectory = path.join(
+    resolvedOutputDirectory,
+    `${baseName}_images`,
+  );
+
+  const zipPath = path.join(
+    resolvedOutputDirectory,
+    `${baseName}.zip`,
+  );
+
+  await fs.rm(albumDirectory, {
+    recursive: true,
+    force: true,
+  });
+
+  await fs.rm(zipPath, {
+    force: true,
+  });
+
+  await fs.mkdir(albumDirectory, {
+    recursive: true,
+  });
+
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--no-sandbox'],
+  });
+
+  try {
+    const context = await browser.newContext({
+      viewport: {
+        width: 1600,
+        height: 1000,
+      },
+    });
+
+    const cookies =
+      await loadInstagramBrowserCookies(
+        cookiesFile,
+      );
+
+    if (cookies.length > 0) {
+      await context.addCookies(cookies);
+    }
+
+    const page = await context.newPage();
+
+    await page.goto(url, {
+      waitUntil: 'domcontentloaded',
+      timeout: 120_000,
+    });
+
+    await page.waitForTimeout(8_000);
+
+    const collected =
+      new Map<string, string>();
+
+    for (
+      let round = 0;
+      round < 12;
+      round += 1
+    ) {
+      if (signal?.aborted) {
+        throw new Error(
+          'Đã hủy tải album Instagram.',
+        );
+      }
+
+      const imageUrls =
+        await page.evaluate(() =>
+          Array.from(
+            document.querySelectorAll<HTMLImageElement>(
+              'img',
+            ),
+          )
+            .filter(
+              (image) =>
+                (
+                  image.currentSrc ||
+                  image.src
+                ).includes(
+                  'cdninstagram.com',
+                ) &&
+                image.naturalWidth >= 500 &&
+                image.naturalHeight >= 500,
+            )
+            .map(
+              (image) =>
+                image.currentSrc ||
+                image.src,
+            ),
+        );
+
+      for (const imageUrl of imageUrls) {
+        collected.set(
+          imageUrl.split('?')[0],
+          imageUrl,
+        );
+      }
+
+      const clicked =
+        await page.evaluate(() => {
+          const button =
+            document.querySelector<HTMLButtonElement>(
+              'button[aria-label="Next"]',
+            );
+
+          if (!button) {
+            return false;
+          }
+
+          button.click();
+          return true;
+        });
+
+      if (!clicked) {
+        break;
+      }
+
+      await page.waitForTimeout(2_000);
+    }
+
+    const imageUrls =
+      Array.from(collected.values());
+
+    if (imageUrls.length === 0) {
+      throw new Error(
+        'Không tìm thấy ảnh trong bài Instagram.',
+      );
+    }
+
+    for (
+      let index = 0;
+      index < imageUrls.length;
+      index += 1
+    ) {
+      if (signal?.aborted) {
+        throw new Error(
+          'Đã hủy tải album Instagram.',
+        );
+      }
+
+      const response =
+        await context.request.get(
+          imageUrls[index],
+          {
+            headers: {
+              Referer: url,
+            },
+            timeout: 120_000,
+          },
+        );
+
+      if (!response.ok()) {
+        throw new Error(
+          `Không tải được ảnh ${index + 1}/${imageUrls.length}: HTTP ${response.status()}.`,
+        );
+      }
+
+      const contentType =
+        response.headers()['content-type'] ||
+        '';
+
+      const extension =
+        contentType.includes('png')
+          ? 'png'
+          : contentType.includes('webp')
+            ? 'webp'
+            : 'jpg';
+
+      const fileName =
+        `${String(index + 1).padStart(3, '0')}.${extension}`;
+
+      await fs.writeFile(
+        path.join(
+          albumDirectory,
+          fileName,
+        ),
+        await response.body(),
+      );
+
+      onProgress?.({
+        percentage:
+          ((index + 1) /
+            imageUrls.length) *
+          90,
+        speed: 'Đang tải ảnh',
+        eta:
+          `${imageUrls.length - index - 1} ảnh`,
+      });
+    }
+
+    onProgress?.({
+      percentage: 95,
+      speed: 'Đang đóng gói ZIP',
+      eta: '--:--',
+    });
+
+    const zipResult = await execa(
+      'zip',
+      ['-r', '-q', zipPath, '.'],
+      {
+        cwd: albumDirectory,
+        reject: false,
+      },
+    );
+
+    if (zipResult.exitCode !== 0) {
+      throw new Error(
+        'Không thể đóng gói album Instagram thành ZIP.',
+      );
+    }
+
+    await fs.rm(albumDirectory, {
+      recursive: true,
+      force: true,
+    });
+
+    onProgress?.({
+      percentage: 100,
+      speed: 'Hoàn tất',
+      eta: '00:00',
+    });
+
+    return {
+      filePath: zipPath,
+      fileName: path.basename(zipPath),
+    };
+  } catch (error) {
+    await fs.rm(albumDirectory, {
+      recursive: true,
+      force: true,
+    });
+
+    throw error;
+  } finally {
+    await browser.close();
+  }
 }
 
 async function downloadTikTokPhotoAlbum(
@@ -548,6 +905,10 @@ export async function downloadMedia(
 
   if (isTikTokPhotoUrl(url)) {
     return downloadTikTokPhotoAlbum(options);
+  }
+
+  if (isInstagramPostUrl(url)) {
+    return downloadInstagramPhotoAlbum(options);
   }
 
   await fs.mkdir(outputDirectory, {
