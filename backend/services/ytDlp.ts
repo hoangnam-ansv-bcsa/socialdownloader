@@ -47,6 +47,55 @@ export interface DownloadMediaOptions {
 
 const YT_DLP_BINARY = process.env.YT_DLP_BINARY || 'yt-dlp';
 
+function getHostname(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function isYouTubeUrl(url: string): boolean {
+  const hostname = getHostname(url);
+
+  return (
+    hostname === 'youtube.com' ||
+    hostname.endsWith('.youtube.com') ||
+    hostname === 'youtu.be' ||
+    hostname.endsWith('.youtu.be')
+  );
+}
+
+function isTikTokUrl(url: string): boolean {
+  const hostname = getHostname(url);
+
+  return (
+    hostname === 'tiktok.com' ||
+    hostname.endsWith('.tiktok.com')
+  );
+}
+
+function addPlatformArguments(
+  args: string[],
+  url: string,
+): void {
+  if (isYouTubeUrl(url)) {
+    args.push(
+      '--js-runtimes',
+      'node',
+      '--remote-components',
+      'ejs:github',
+    );
+  }
+
+  if (isTikTokUrl(url)) {
+    args.push(
+      '--impersonate',
+      'Chrome-131:MacOS-14',
+    );
+  }
+}
+
 function sanitizeFileName(value: string): string {
   const cleaned = value
     .replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_')
@@ -75,11 +124,12 @@ export async function getMediaMetadata(
     '--skip-download',
     '--no-playlist',
     '--no-warnings',
-    '--js-runtimes',
-    'node',
-    '--remote-components',
-    'ejs:github',
   ];
+
+  addPlatformArguments(
+    metadataArgs,
+    url,
+  );
 
   const cookiesPath = path.resolve(
     process.env.YT_DLP_COOKIES || 'secrets/cookies.txt',
@@ -143,10 +193,6 @@ export async function downloadMedia(
     '--no-warnings',
     '--continue',
     '--part',
-    '--js-runtimes',
-    'node',
-    '--remote-components',
-    'ejs:github',
     '--output',
     outputTemplate,
     '--progress-template',
@@ -171,6 +217,11 @@ export async function downloadMedia(
       'mp4',
     );
   }
+
+  addPlatformArguments(
+    args,
+    url,
+  );
 
   const resolvedCookiesFile = path.resolve(
     cookiesFile ||
