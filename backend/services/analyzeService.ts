@@ -1182,8 +1182,29 @@ async function analyzeFacebookChannelRange(
                 image?.src ||
                 '';
 
+              const normalizedTitle =
+                title.toLowerCase();
+
+              const isProfileImage =
+                normalizedTitle.includes(
+                  'profile picture',
+                ) ||
+                normalizedTitle.includes(
+                  'profile cover photo',
+                ) ||
+                normalizedTitle.includes(
+                  'ảnh đại diện',
+                ) ||
+                normalizedTitle.includes(
+                  'ảnh bìa',
+                );
+
               if (
-                pathname.startsWith('/photo')
+                (
+                  pathname.startsWith('/photo/') ||
+                  pathname === '/photo.php'
+                ) &&
+                !isProfileImage
               ) {
                 const fbid =
                   parsedUrl.searchParams.get(
@@ -1271,6 +1292,52 @@ async function analyzeFacebookChannelRange(
                 continue;
               }
 
+              const sharedVideoMatch =
+                pathname.match(
+                  /^\/share\/(?:r|v)\/([^/?]+)/,
+                );
+
+              if (sharedVideoMatch) {
+                const id = sharedVideoMatch[1];
+                const key = `video:share:${id}`;
+
+                store[key] = {
+                  key,
+                  id,
+                  href:
+                    `https://www.facebook.com${pathname}`,
+                  title,
+                  thumbnail,
+                  mediaType: 'video',
+                };
+
+                continue;
+              }
+
+              const watchVideoId =
+                pathname === '/watch/'
+                  ? parsedUrl.searchParams.get(
+                      'v',
+                    )
+                  : null;
+
+              if (watchVideoId) {
+                const key =
+                  `video:${watchVideoId}`;
+
+                store[key] = {
+                  key,
+                  id: watchVideoId,
+                  href:
+                    `https://www.facebook.com/watch/?v=${watchVideoId}`,
+                  title,
+                  thumbnail,
+                  mediaType: 'video',
+                };
+
+                continue;
+              }
+
               const videoMatch =
                 pathname.match(
                   /\/videos\/(\d+)/,
@@ -1313,12 +1380,20 @@ async function analyzeFacebookChannelRange(
         unchangedRounds = 0;
       }
 
-      if (unchangedRounds >= 5) {
+      if (unchangedRounds >= 12) {
         break;
       }
 
-      await page.mouse.wheel(0, 2200);
-      await page.waitForTimeout(1_000);
+      if (
+        unchangedRounds > 0 &&
+        unchangedRounds % 4 === 0
+      ) {
+        await page.keyboard.press('End');
+      } else {
+        await page.mouse.wheel(0, 1000);
+      }
+
+      await page.waitForTimeout(1_500);
     }
 
     await page.mouse.wheel(0, -1400);
