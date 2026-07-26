@@ -1681,6 +1681,122 @@ async function analyzeTikTokChannelRange(
   }
 }
 
+function isFacebookProfileRootUrl(
+  url: string,
+): boolean {
+  try {
+    const parsedUrl = new URL(url);
+
+    const segments =
+      parsedUrl.pathname
+        .split('/')
+        .filter(Boolean);
+
+    if (segments.length !== 1) {
+      return false;
+    }
+
+    const reservedPaths = new Set([
+      'photo',
+      'photo.php',
+      'reel',
+      'reels',
+      'videos',
+      'watch',
+      'share',
+      'groups',
+      'pages',
+      'marketplace',
+      'stories',
+    ]);
+
+    return !reservedPaths.has(
+      segments[0].toLowerCase(),
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function analyzeFacebookProfileTabsRange(
+  url: string,
+  start: number,
+  end: number,
+): Promise<AnalyzeResult[]> {
+  const parsedUrl = new URL(url);
+
+  const profilePath =
+    parsedUrl.pathname.replace(
+      /\/+$/,
+      '',
+    );
+
+  const profileBaseUrl =
+    `${parsedUrl.origin}${profilePath}`;
+
+  const tabUrls = [
+    profileBaseUrl,
+    `${profileBaseUrl}/photos`,
+    `${profileBaseUrl}/reels`,
+    `${profileBaseUrl}/videos`,
+  ];
+
+  const collected =
+    new Map<string, AnalyzeResult>();
+
+  const errors: string[] = [];
+
+  for (const tabUrl of tabUrls) {
+    try {
+      const results =
+        await analyzeFacebookChannelRange(
+          tabUrl,
+          1,
+          end,
+        );
+
+      console.info(
+        `[FacebookTabs] ${tabUrl}: ${results.length} bài`,
+      );
+
+      for (const item of results) {
+        const key =
+          `${item.mediaType}:${item.id || item.url}`;
+
+        if (!collected.has(key)) {
+          collected.set(key, item);
+        }
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : `Không thể quét ${tabUrl}`;
+
+      console.warn(
+        `[FacebookTabs] Lỗi ${tabUrl}: ${message}`,
+      );
+
+      errors.push(message);
+    }
+  }
+
+  const items =
+    Array.from(collected.values());
+
+  if (items.length === 0) {
+    throw new Error(
+      errors[0] ||
+        'Không lấy được nội dung từ trang Facebook.',
+    );
+  }
+
+  return items.slice(
+    start - 1,
+    end,
+  );
+}
+
 export async function analyzeChannelRange(
   url: string,
   start: number,
@@ -1705,6 +1821,14 @@ export async function analyzeChannelRange(
   }
 
   if (isFacebookUrl(url)) {
+    if (isFacebookProfileRootUrl(url)) {
+      return analyzeFacebookProfileTabsRange(
+        url,
+        normalizedStart,
+        normalizedEnd,
+      );
+    }
+
     return analyzeFacebookChannelRange(
       url,
       normalizedStart,

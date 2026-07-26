@@ -44,7 +44,12 @@ interface AppStoreState {
   fetchQueue: () => Promise<void>;
   addToQueue: (items: MediaItem[]) => Promise<void>;
   queueAction: (id: string, action: 'pause' | 'resume' | 'cancel' | 'delete' | 'restart') => Promise<void>;
-  clearCompletedQueue: () => Promise<void>;
+  clearCompletedQueue: (
+    ids?: string[],
+  ) => Promise<void>;
+  queueBulkAction: (
+    action: 'pause' | 'resume' | 'cancel' | 'clear',
+  ) => Promise<void>;
   fetchStats: () => Promise<void>;
   analyzeChannel: (url: string, limit?: number) => Promise<void>;
   stopChannelScan: () => Promise<void>;
@@ -207,12 +212,79 @@ export const useAppStore = create<AppStoreState>((set, get) => ({
     }
   },
 
-  clearCompletedQueue: async () => {
+  clearCompletedQueue: async (ids) => {
     try {
-      await fetch('/api/queue/clear-completed', { method: 'POST' });
-      get().fetchQueue();
+      const response = await fetch(
+        '/api/queue/clear-completed',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(
+            Array.isArray(ids)
+              ? { ids }
+              : {},
+          ),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          `Clear completed queue failed: ${response.status}`,
+        );
+      }
+
+      const result = await response.json();
+
+      set({
+        queue: Array.isArray(result.queue)
+          ? result.queue
+          : [],
+      });
+
+      get().fetchStats();
     } catch (err) {
-      console.error('Failed to clear completed queue', err);
+      console.error(
+        'Failed to clear completed queue',
+        err,
+      );
+    }
+  },
+
+  queueBulkAction: async (action) => {
+    try {
+      const response = await fetch(
+        '/api/queue/bulk-action',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ action }),
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          `Queue bulk action failed: ${response.status}`,
+        );
+      }
+
+      const result = await response.json();
+
+      set({
+        queue: Array.isArray(result.queue)
+          ? result.queue
+          : [],
+      });
+
+      get().fetchStats();
+    } catch (err) {
+      console.error(
+        'Failed to trigger bulk queue action',
+        err,
+      );
     }
   },
 

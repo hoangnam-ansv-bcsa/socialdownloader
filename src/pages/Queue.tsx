@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAppStore } from '../stores/useAppStore';
 import {
   Pause,
@@ -14,9 +14,24 @@ import {
 } from 'lucide-react';
 
 export const Queue: React.FC = () => {
-  const { queue, queueAction, clearCompletedQueue, settings, updateSettings, fetchQueue } = useAppStore();
+  const {
+    queue,
+    queueAction,
+    clearCompletedQueue,
+    queueBulkAction,
+    settings,
+    updateSettings,
+    fetchQueue,
+  } = useAppStore();
 
   const isVi = settings?.language === 'vi';
+
+  const [
+    selectedFinishedIds,
+    setSelectedFinishedIds,
+  ] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   useEffect(() => {
     fetchQueue();
@@ -26,8 +41,126 @@ export const Queue: React.FC = () => {
     (item) => item.status === 'downloading' || item.status === 'pending' || item.status === 'paused'
   );
   const finishedDownloads = queue.filter(
-    (item) => item.status === 'completed' || item.status === 'failed'
+    (item) =>
+      item.status === 'completed' ||
+      item.status === 'failed' ||
+      item.status === 'cancelled'
   );
+
+  const allFinishedSelected =
+    finishedDownloads.length > 0 &&
+    finishedDownloads.every(
+      (item) =>
+        selectedFinishedIds.has(item.id),
+    );
+
+  const toggleFinishedSelection = (
+    id: string,
+  ) => {
+    setSelectedFinishedIds(
+      (current) => {
+        const next = new Set(current);
+
+        if (next.has(id)) {
+          next.delete(id);
+        } else {
+          next.add(id);
+        }
+
+        return next;
+      },
+    );
+  };
+
+  const toggleAllFinished = () => {
+    setSelectedFinishedIds(
+      allFinishedSelected
+        ? new Set()
+        : new Set(
+            finishedDownloads.map(
+              (item) => item.id,
+            ),
+          ),
+    );
+  };
+
+  const handleDeleteSelectedFinished =
+    async () => {
+      const ids = Array.from(
+        selectedFinishedIds,
+      );
+
+      if (ids.length === 0) {
+        return;
+      }
+
+      const confirmed = window.confirm(
+        isVi
+          ? `Xóa ${ids.length} tác vụ đã chọn khỏi hàng đợi? Các file đã tải sẽ được giữ nguyên.`
+          : `Delete ${ids.length} selected queue entries? Downloaded files will be kept.`,
+      );
+
+      if (!confirmed) {
+        return;
+      }
+
+      await clearCompletedQueue(ids);
+      setSelectedFinishedIds(new Set());
+    };
+
+  const handleDeleteAllFinished =
+    async () => {
+      if (finishedDownloads.length === 0) {
+        return;
+      }
+
+      const confirmed = window.confirm(
+        isVi
+          ? 'Xóa toàn bộ tác vụ hoàn thành, lỗi và đã dừng khỏi hàng đợi? Các file đã tải sẽ được giữ nguyên.'
+          : 'Delete all finished, failed and cancelled queue entries? Downloaded files will be kept.',
+      );
+
+      if (!confirmed) {
+        return;
+      }
+
+      await clearCompletedQueue();
+      setSelectedFinishedIds(new Set());
+    };
+
+  const hasRunningOrPending = queue.some(
+    (item) =>
+      item.status === 'downloading' ||
+      item.status === 'pending'
+  );
+
+  const hasPaused = queue.some(
+    (item) => item.status === 'paused'
+  );
+
+  const handleStopAll = () => {
+    const confirmed = window.confirm(
+      isVi
+        ? 'Dừng toàn bộ tác vụ đang tải và đang chờ?'
+        : 'Stop all active and queued downloads?'
+    );
+
+    if (confirmed) {
+      void queueBulkAction('cancel');
+    }
+  };
+
+  const handleClearAll = () => {
+    const confirmed = window.confirm(
+      isVi
+        ? 'Xóa toàn bộ tác vụ khỏi hàng đợi? Các file đã tải xong sẽ không bị xóa.'
+        : 'Clear the entire queue? Downloaded files will not be deleted.'
+    );
+
+    if (confirmed) {
+      void queueBulkAction('clear');
+    }
+  };
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -57,6 +190,13 @@ export const Queue: React.FC = () => {
           <span className="flex items-center space-x-1.5 text-xs text-rose-400 bg-rose-500/10 px-2 py-0.5 rounded-md border border-rose-500/20">
             <XOctagon className="h-3.5 w-3.5" />
             <span>{isVi ? 'Thất bại' : 'Failed'}</span>
+          </span>
+        );
+      case 'cancelled':
+        return (
+          <span className="flex items-center space-x-1.5 text-xs text-slate-400 bg-slate-500/10 px-2 py-0.5 rounded-md border border-slate-500/20">
+            <XOctagon className="h-3.5 w-3.5" />
+            <span>{isVi ? 'Đã dừng' : 'Cancelled'}</span>
           </span>
         );
       default:
@@ -93,7 +233,7 @@ export const Queue: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center space-x-4">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center space-x-2">
             <span className="text-xs text-slate-400">{isVi ? 'Tải đồng thời:' : 'Workers:'}</span>
             <select
@@ -110,11 +250,43 @@ export const Queue: React.FC = () => {
           </div>
 
           <button
-            onClick={clearCompletedQueue}
+            onClick={() => void queueBulkAction('pause')}
+            disabled={!hasRunningOrPending}
+            className="bg-amber-500/10 hover:bg-amber-500/20 disabled:opacity-40 text-amber-400 text-xs px-3 py-2 rounded-lg border border-amber-500/30 transition-colors"
+          >
+            {isVi ? 'Tạm dừng toàn bộ' : 'Pause All'}
+          </button>
+
+          <button
+            onClick={() => void queueBulkAction('resume')}
+            disabled={!hasPaused}
+            className="bg-emerald-500/10 hover:bg-emerald-500/20 disabled:opacity-40 text-emerald-400 text-xs px-3 py-2 rounded-lg border border-emerald-500/30 transition-colors"
+          >
+            {isVi ? 'Tiếp tục toàn bộ' : 'Resume All'}
+          </button>
+
+          <button
+            onClick={handleStopAll}
+            disabled={!hasRunningOrPending && !hasPaused}
+            className="bg-rose-500/10 hover:bg-rose-500/20 disabled:opacity-40 text-rose-400 text-xs px-3 py-2 rounded-lg border border-rose-500/30 transition-colors"
+          >
+            {isVi ? 'Dừng toàn bộ' : 'Stop All'}
+          </button>
+
+          <button
+            onClick={() => void handleDeleteAllFinished()}
             disabled={finishedDownloads.length === 0}
-            className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:hover:bg-slate-800 text-slate-300 text-xs px-4 py-2 rounded-lg border border-slate-700 transition-colors duration-150 cursor-pointer"
+            className="bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:hover:bg-slate-800 text-slate-300 text-xs px-3 py-2 rounded-lg border border-slate-700 transition-colors"
           >
             {isVi ? 'Xóa tác vụ đã xong' : 'Clear Finished'}
+          </button>
+
+          <button
+            onClick={handleClearAll}
+            disabled={queue.length === 0}
+            className="bg-slate-950 hover:bg-rose-950/50 disabled:opacity-40 text-slate-300 hover:text-rose-300 text-xs px-3 py-2 rounded-lg border border-slate-700 hover:border-rose-800 transition-colors"
+          >
+            {isVi ? 'Xóa toàn bộ tiến trình đang tải' : 'Clear Active Queue'}
           </button>
         </div>
       </div>
@@ -222,10 +394,55 @@ export const Queue: React.FC = () => {
 
         {/* Completed queue items visual check list */}
         <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
-          <div className="p-4 border-b border-slate-800 bg-slate-900">
-            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-              {isVi ? 'Tác vụ đã hoàn thành / lỗi' : 'Finished queue jobs'} ({finishedDownloads.length})
-            </h4>
+          <div className="p-4 border-b border-slate-800 bg-slate-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <input
+                type="checkbox"
+                checked={allFinishedSelected}
+                disabled={finishedDownloads.length === 0}
+                onChange={toggleAllFinished}
+                className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-blue-600"
+                title={
+                  isVi
+                    ? 'Chọn tất cả tác vụ đã hoàn thành'
+                    : 'Select all finished tasks'
+                }
+              />
+
+              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                {isVi ? 'Tác vụ đã hoàn thành / lỗi' : 'Finished queue jobs'} ({finishedDownloads.length})
+              </h4>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() =>
+                  void handleDeleteSelectedFinished()
+                }
+                disabled={
+                  selectedFinishedIds.size === 0
+                }
+                className="bg-rose-500/10 hover:bg-rose-500/20 disabled:opacity-40 text-rose-400 text-xs px-3 py-1.5 rounded-lg border border-rose-500/30 transition-colors"
+              >
+                {isVi
+                  ? `Xóa mục đã chọn (${selectedFinishedIds.size})`
+                  : `Delete Selected (${selectedFinishedIds.size})`}
+              </button>
+
+              <button
+                onClick={() =>
+                  void handleDeleteAllFinished()
+                }
+                disabled={
+                  finishedDownloads.length === 0
+                }
+                className="bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 text-xs px-3 py-1.5 rounded-lg border border-slate-700 transition-colors"
+              >
+                {isVi
+                  ? 'Xóa toàn bộ mục đã hoàn thành'
+                  : 'Delete All Finished'}
+              </button>
+            </div>
           </div>
 
           {finishedDownloads.length === 0 ? (
@@ -237,6 +454,26 @@ export const Queue: React.FC = () => {
               {finishedDownloads.map((item) => (
                 <div key={item.id} className="p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div className="flex items-center space-x-3.5">
+                    <input
+                      type="checkbox"
+                      checked={
+                        selectedFinishedIds.has(
+                          item.id,
+                        )
+                      }
+                      onChange={() =>
+                        toggleFinishedSelection(
+                          item.id,
+                        )
+                      }
+                      className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-blue-600 shrink-0"
+                      aria-label={
+                        isVi
+                          ? `Chọn ${item.title}`
+                          : `Select ${item.title}`
+                      }
+                    />
+
                     <img
                       src={item.thumbnail}
                       alt={item.title}

@@ -53,7 +53,15 @@ app.use(express.json({
 }));
 
 const activeDownloads = new Map<string, AbortController>();
+
+const downloadAbortActions =
+  new Map<string, 'pause' | 'cancel'>();
+
+const suppressedDownloadUpdates =
+  new Set<string>();
+
 let schedulerRunning = false;
+let queuePaused = false;
 
 type ChannelScanStatus =
   | 'scanning'
@@ -432,29 +440,49 @@ async function runDownload(
         (queueItem) => queueItem.id === item.id,
       ) || item;
 
-    const cancelled = controller.signal.aborted;
+    const aborted =
+      controller.signal.aborted;
 
-    updateQueueItem({
-      ...currentItem,
-      status: cancelled ? 'paused' : 'failed',
-      downloadSpeed: undefined,
-      eta: undefined,
-    });
+    const abortAction =
+      downloadAbortActions.get(item.id);
+
+    const wasSuppressed =
+      suppressedDownloadUpdates.has(item.id);
+
+    if (!wasSuppressed) {
+      updateQueueItem({
+        ...currentItem,
+        status:
+          aborted
+            ? abortAction === 'cancel'
+              ? 'cancelled'
+              : 'paused'
+            : 'failed',
+        downloadSpeed: undefined,
+        eta: undefined,
+      });
+    }
 
     const message =
       error instanceof Error
         ? error.message
         : String(error);
 
-    addLog(
-      cancelled ? 'warning' : 'error',
-      'Downloader',
-      cancelled
-        ? `Đã dừng tải: ${item.title}`
-        : `Tải thất bại: ${item.title}. ${message}`,
-    );
+    if (!wasSuppressed) {
+      addLog(
+        aborted ? 'warning' : 'error',
+        'Downloader',
+        aborted
+          ? abortAction === 'cancel'
+            ? `Đã hủy tải: ${item.title}`
+            : `Đã tạm dừng tải: ${item.title}`
+          : `Tải thất bại: ${item.title}. ${message}`,
+      );
+    }
   } finally {
     activeDownloads.delete(item.id);
+    downloadAbortActions.delete(item.id);
+    suppressedDownloadUpdates.delete(item.id);
 
     setTimeout(() => {
       void processQueue();
@@ -463,14 +491,14 @@ async function runDownload(
 }
 
 async function processQueue(): Promise<void> {
-  if (schedulerRunning) {
+  if (schedulerRunning || queuePaused) {
     return;
   }
 
   schedulerRunning = true;
 
   try {
-    while (true) {
+    while (!queuePaused) {
       const settings = getSettings();
       const queue = getQueue();
 
@@ -813,6 +841,13 @@ app.post('/api/queue/action', (req, res) => {
   }
 
   if (action === 'pause' || action === 'cancel') {
+    downloadAbortActions.set(
+      id,
+      action === 'cancel'
+        ? 'cancel'
+        : 'pause',
+    );
+
     activeDownloads.get(id)?.abort();
 
     queue = queue.map((queueItem) =>
@@ -828,6 +863,8 @@ app.post('/api/queue/action', (req, res) => {
   }
 
   if (action === 'delete') {
+    downloadAbortActions.set(id, 'cancel');
+    suppressedDownloadUpdates.add(id);
     activeDownloads.get(id)?.abort();
 
     queue = queue.filter(
@@ -864,14 +901,188 @@ app.post('/api/queue/action', (req, res) => {
   });
 });
 
-app.post('/api/queue/clear-completed', (_req, res) => {
-  const queue = getQueue().filter(
-    (item) =>
-      item.status !== 'completed' &&
-      item.status !== 'failed',
-  );
+app.post('/api/queue/bulk-action', (req, res) => {
+  const { action } = req.body as {
+    action?:
+      | 'pause'
+      | 'resume'
+      | 'cancel'
+      | 'clear';
+  };
+
+  if (!action) {
+    return res.status(400).json({
+      error: 'Thiếu hành động hàng đợi.',
+    });
+  }
+
+  let queue = getQueue();
+
+  if (action === 'pause') {
+    queuePaused = true;
+
+    for (const [id, controller] of activeDownloads) {
+      downloadAbortActions.set(id, 'pause');
+      controller.abort();
+    }
+
+    queue = queue.map((item) =>
+      item.status === 'pending' ||
+      item.status === 'downloading'
+        ? {
+            ...item,
+            status: 'paused',
+            downloadSpeed: undefined,
+            eta: undefined,
+          }
+        : item,
+    );
+
+    addLog(
+      'warning',
+      'Queue',
+      'Đã tạm dừng toàn bộ hàng đợi tải.',
+    );
+  }
+
+  if (action === 'resume') {
+    queuePaused = false;
+
+    queue = queue.map((item) =>
+      item.status === 'paused'
+        ? {
+            ...item,
+            status: 'pending',
+            downloadSpeed: undefined,
+            eta: undefined,
+          }
+        : item,
+    );
+
+    addLog(
+      'info',
+      'Queue',
+      'Đã tiếp tục toàn bộ hàng đợi tải.',
+    );
+  }
+
+  if (action === 'cancel') {
+    queuePaused = true;
+
+    for (const [id, controller] of activeDownloads) {
+      downloadAbortActions.set(id, 'cancel');
+      controller.abort();
+    }
+
+    queue = queue.map((item) =>
+      item.status === 'pending' ||
+      item.status === 'downloading' ||
+      item.status === 'paused'
+        ? {
+            ...item,
+            status: 'cancelled',
+            downloadSpeed: undefined,
+            eta: undefined,
+          }
+        : item,
+    );
+
+    addLog(
+      'warning',
+      'Queue',
+      'Đã dừng toàn bộ tác vụ tải.',
+    );
+  }
+
+  if (action === 'clear') {
+    queuePaused = true;
+
+    const removableIds = new Set(
+      queue
+        .filter(
+          (item) =>
+            item.status === 'pending' ||
+            item.status === 'downloading' ||
+            item.status === 'paused',
+        )
+        .map((item) => item.id),
+    );
+
+    for (const [id, controller] of activeDownloads) {
+      if (!removableIds.has(id)) {
+        continue;
+      }
+
+      downloadAbortActions.set(id, 'cancel');
+      suppressedDownloadUpdates.add(id);
+      controller.abort();
+    }
+
+    queue = queue.filter(
+      (item) => !removableIds.has(item.id),
+    );
+
+    addLog(
+      'warning',
+      'Queue',
+      'Đã xóa toàn bộ tiến trình đang tải.',
+    );
+  }
 
   saveQueue(queue);
+
+  if (action === 'resume') {
+    void processQueue();
+  }
+
+  return res.json({
+    success: true,
+    queue,
+    paused: queuePaused,
+  });
+});
+
+app.post('/api/queue/clear-completed', (req, res) => {
+  const { ids } = req.body as {
+    ids?: string[];
+  };
+
+  const finishedStatuses = new Set([
+    'completed',
+    'failed',
+    'cancelled',
+  ]);
+
+  const selectedIds = Array.isArray(ids)
+    ? new Set(
+        ids.filter(
+          (id): id is string =>
+            typeof id === 'string',
+        ),
+      )
+    : null;
+
+  const queue = getQueue().filter((item) => {
+    if (!finishedStatuses.has(item.status)) {
+      return true;
+    }
+
+    if (!selectedIds) {
+      return false;
+    }
+
+    return !selectedIds.has(item.id);
+  });
+
+  saveQueue(queue);
+
+  addLog(
+    'info',
+    'Queue',
+    selectedIds
+      ? `Đã xóa ${selectedIds.size} tác vụ đã chọn.`
+      : 'Đã xóa toàn bộ tác vụ hoàn thành, lỗi và đã dừng.',
+  );
 
   res.json({
     success: true,

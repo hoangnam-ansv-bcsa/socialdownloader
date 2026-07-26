@@ -21,7 +21,7 @@ export interface MediaItem {
   duration?: string; // e.g., "01:24"
   resolution: string; // e.g., "1080p", "4K"
   estimatedSize: number; // in bytes
-  status: 'pending' | 'analyzing' | 'ready' | 'downloading' | 'completed' | 'failed' | 'paused';
+  status: 'pending' | 'analyzing' | 'ready' | 'downloading' | 'completed' | 'failed' | 'paused' | 'cancelled';
   progress: number; // 0 to 100
   downloadSpeed?: string; // e.g., "2.4 MB/s"
   eta?: string; // e.g., "00:15"
