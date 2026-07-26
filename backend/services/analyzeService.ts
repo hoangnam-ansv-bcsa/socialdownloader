@@ -3,6 +3,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { execa } from 'execa';
 import { chromium } from 'playwright';
+import {
+  getFacebookPlaywrightCookies,
+} from './facebookSessionStore';
 
 export interface AnalyzeResult {
   id: string;
@@ -375,6 +378,13 @@ function mapEntry(
 }
 
 async function loadFacebookBrowserCookies() {
+  const browserCookies =
+    getFacebookPlaywrightCookies();
+
+  if (browserCookies.length > 0) {
+    return browserCookies;
+  }
+
   const cookiesPath = path.resolve(
     process.env.YT_DLP_COOKIES ||
       'secrets/cookies.txt',
@@ -1110,7 +1120,7 @@ async function analyzeFacebookChannelRange(
 
     for (
       let round = 0;
-      round < 160;
+      round < 80;
       round += 1
     ) {
       const currentCount =
@@ -1303,12 +1313,12 @@ async function analyzeFacebookChannelRange(
         unchangedRounds = 0;
       }
 
-      if (unchangedRounds >= 8) {
+      if (unchangedRounds >= 5) {
         break;
       }
 
       await page.mouse.wheel(0, 2200);
-      await page.waitForTimeout(1_500);
+      await page.waitForTimeout(1_000);
     }
 
     await page.mouse.wheel(0, -1400);

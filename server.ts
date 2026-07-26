@@ -38,31 +38,15 @@ import {
   PlatformType,
 } from './src/types';
 
+import {
+  getFacebookBrowserSession,
+  setFacebookBrowserSession,
+} from './backend/services/facebookSessionStore';
+
 dotenv.config();
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
-
-interface FacebookHelperCookie {
-  name: string;
-  value: string;
-  domain: string;
-  path: string;
-  secure?: boolean;
-  httpOnly?: boolean;
-  sameSite?: string;
-  expirationDate?: number;
-}
-
-interface FacebookBrowserSession {
-  cookies: FacebookHelperCookie[];
-  userAgent?: string;
-  receivedAt: number;
-}
-
-let facebookBrowserSession:
-  | FacebookBrowserSession
-  | null = null;
 
 app.use(express.json({
   limit: '1mb',
@@ -88,7 +72,7 @@ interface ChannelScanSession {
   updatedAt: number;
 }
 
-const CHANNEL_SCAN_BATCH_SIZE = 200;
+const CHANNEL_SCAN_BATCH_SIZE = 50;
 
 const channelScanSessions =
   new Map<string, ChannelScanSession>();
@@ -630,14 +614,13 @@ app.post(
       });
     }
 
-    facebookBrowserSession = {
-      cookies,
-      userAgent:
+    const facebookBrowserSession =
+      setFacebookBrowserSession(
+        cookies,
         typeof body.userAgent === 'string'
           ? body.userAgent.slice(0, 500)
           : undefined,
-      receivedAt: Date.now(),
-    };
+      );
 
     addLog(
       'info',
@@ -661,6 +644,9 @@ app.get(
       'Cache-Control',
       'no-store',
     );
+
+    const facebookBrowserSession =
+      getFacebookBrowserSession();
 
     return res.json({
       connected:

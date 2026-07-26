@@ -2,6 +2,9 @@ import { execa } from 'execa';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
+import {
+  getFacebookPlaywrightCookies,
+} from './facebookSessionStore';
 
 export interface YtDlpMetadata {
   id?: string;
@@ -414,6 +417,13 @@ async function loadInstagramBrowserCookies(
 async function loadFacebookBrowserCookies(
   cookiesFile?: string,
 ) {
+  const browserCookies =
+    getFacebookPlaywrightCookies();
+
+  if (browserCookies.length > 0) {
+    return browserCookies;
+  }
+
   const cookiesPath = path.resolve(
     cookiesFile ||
       process.env.YT_DLP_COOKIES ||
