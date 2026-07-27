@@ -88,6 +88,46 @@ function isYouTubeUrl(url: string): boolean {
   );
 }
 
+function isFacebookSingleMediaUrl(
+  url: string,
+): boolean {
+  if (!isFacebookUrl(url)) {
+    return false;
+  }
+
+  try {
+    const parsedUrl = new URL(url);
+    const pathname =
+      parsedUrl.pathname.replace(/\/+$/, '');
+
+    if (
+      /^\/reel\/[^/]+$/i.test(pathname) ||
+      /^\/share\/(?:r|v)\/[^/]+$/i.test(pathname) ||
+      /\/videos\/[^/]+$/i.test(pathname)
+    ) {
+      return true;
+    }
+
+    if (
+      pathname === '/watch' &&
+      parsedUrl.searchParams.has('v')
+    ) {
+      return true;
+    }
+
+    if (
+      pathname.startsWith('/photo') &&
+      parsedUrl.searchParams.has('fbid')
+    ) {
+      return true;
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 function isFacebookPhotoUrl(url: string): boolean {
   const hostname = getHostname(url);
 
@@ -1120,7 +1160,7 @@ async function analyzeFacebookChannelRange(
 
     for (
       let round = 0;
-      round < 80;
+      round < 40;
       round += 1
     ) {
       const currentCount =
@@ -1380,26 +1420,18 @@ async function analyzeFacebookChannelRange(
         unchangedRounds = 0;
       }
 
-      if (unchangedRounds >= 12) {
+      if (unchangedRounds >= 6) {
         break;
       }
 
-      if (
-        unchangedRounds > 0 &&
-        unchangedRounds % 4 === 0
-      ) {
-        await page.keyboard.press('End');
-      } else {
-        await page.mouse.wheel(0, 1000);
-      }
-
-      await page.waitForTimeout(1_500);
+      await page.mouse.wheel(0, 800);
+      await page.waitForTimeout(2_500);
     }
 
-    await page.mouse.wheel(0, -1400);
+    await page.mouse.wheel(0, -600);
+    await page.waitForTimeout(1_500);
+    await page.mouse.wheel(0, 600);
     await page.waitForTimeout(2_000);
-    await page.mouse.wheel(0, 1400);
-    await page.waitForTimeout(3_000);
 
     const rawItems =
       await page.evaluate(() => {
@@ -1767,6 +1799,19 @@ async function analyzeFacebookProfileTabsRange(
           collected.set(key, item);
         }
       }
+
+      const isLastTab =
+        tabUrl === tabUrls[tabUrls.length - 1];
+
+      if (!isLastTab) {
+        console.info(
+          '[FacebookTabs] Nghỉ 8 giây trước tab tiếp theo.',
+        );
+
+        await new Promise((resolve) =>
+          setTimeout(resolve, 8_000),
+        );
+      }
     } catch (error) {
       const message =
         error instanceof Error
@@ -1825,6 +1870,19 @@ export async function analyzeChannelRange(
       return analyzeFacebookProfileTabsRange(
         url,
         normalizedStart,
+        normalizedEnd,
+      );
+    }
+
+    if (isFacebookSingleMediaUrl(url)) {
+      if (normalizedStart > 1) {
+        return [];
+      }
+
+      const item = await analyzeUrl(url);
+
+      return [item].slice(
+        normalizedStart - 1,
         normalizedEnd,
       );
     }
