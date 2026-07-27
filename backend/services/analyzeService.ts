@@ -1409,63 +1409,6 @@ async function analyzeFacebookChannelRange(
           return Object.keys(store).length;
         });
 
-      const scrollState =
-        await page.evaluate(() => {
-          const candidates = Array.from(
-            document.querySelectorAll<HTMLElement>('*'),
-          )
-            .filter((element) => {
-              const style =
-                window.getComputedStyle(element);
-
-              const overflowY =
-                style.overflowY;
-
-              return (
-                (
-                  overflowY === 'auto' ||
-                  overflowY === 'scroll'
-                ) &&
-                element.scrollHeight >
-                  element.clientHeight + 100
-              );
-            })
-            .sort(
-              (a, b) =>
-                b.scrollHeight -
-                a.scrollHeight,
-            )
-            .slice(0, 5)
-            .map((element) => ({
-              tag: element.tagName,
-              role:
-                element.getAttribute('role'),
-              ariaLabel:
-                element.getAttribute(
-                  'aria-label',
-                ),
-              scrollTop:
-                element.scrollTop,
-              scrollHeight:
-                element.scrollHeight,
-              clientHeight:
-                element.clientHeight,
-            }));
-
-          return {
-            scrollY: window.scrollY,
-            scrollHeight:
-              document.documentElement.scrollHeight,
-            clientHeight:
-              document.documentElement.clientHeight,
-            candidates,
-          };
-        });
-
-      console.info(
-        `[FacebookScroll] vòng ${round + 1}: ${currentCount} mục, y=${scrollState.scrollY}, height=${scrollState.scrollHeight}, containers=${JSON.stringify(scrollState.candidates)}`,
-      );
-
       if (currentCount >= end) {
         break;
       }
