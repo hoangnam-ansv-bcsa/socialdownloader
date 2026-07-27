@@ -29,6 +29,7 @@ import {
   analyzeUrl,
   analyzeChannel,
   analyzeChannelRange,
+  isFacebookProfileRootUrl,
   type AnalyzeResult,
 } from './backend/services/analyzeService';
 
@@ -200,6 +201,83 @@ async function runChannelScan(
   }
 
   try {
+    if (isFacebookProfileRootUrl(session.url)) {
+      addLog(
+        'info',
+        'ChannelScanner',
+        'Đang quét Facebook profile một lượt, không lặp lại theo batch.',
+      );
+
+      const results = await analyzeChannelRange(
+        session.url,
+        1,
+        1000,
+      );
+
+      if (session.stopRequested) {
+        session.status = 'stopped';
+        session.updatedAt = Date.now();
+        return;
+      }
+
+      const uniqueItems =
+        new Map<string, MediaItem>();
+
+      for (const result of results) {
+        const item =
+          mapChannelResultToMediaItem(result);
+
+        const key =
+          `${item.platform}:${item.mediaType}:${item.id || item.url}`;
+
+        if (!uniqueItems.has(key)) {
+          uniqueItems.set(key, item);
+        }
+      }
+
+      const allItems =
+        Array.from(uniqueItems.values());
+
+      for (
+        let offset = 0;
+        offset < allItems.length;
+        offset += CHANNEL_SCAN_BATCH_SIZE
+      ) {
+        if (session.stopRequested) {
+          session.status = 'stopped';
+          session.updatedAt = Date.now();
+          return;
+        }
+
+        const batch = allItems.slice(
+          offset,
+          offset + CHANNEL_SCAN_BATCH_SIZE,
+        );
+
+        session.items.push(...batch);
+        session.updatedAt = Date.now();
+
+        addLog(
+          'info',
+          'ChannelScanner',
+          `Đã chuyển ${session.items.length}/${allItems.length} bài Facebook lên giao diện.`,
+        );
+
+        await sleep(500);
+      }
+
+      session.status = 'completed';
+      session.updatedAt = Date.now();
+
+      addLog(
+        'info',
+        'ChannelScanner',
+        `Hoàn tất quét ${session.items.length} bài Facebook công khai trong một lượt.`,
+      );
+
+      return;
+    }
+
     while (!session.stopRequested) {
       const start = session.items.length + 1;
       const end =

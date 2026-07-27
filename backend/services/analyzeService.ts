@@ -1160,7 +1160,7 @@ async function analyzeFacebookChannelRange(
 
     for (
       let round = 0;
-      round < 40;
+      round < 70;
       round += 1
     ) {
       const currentCount =
@@ -1409,6 +1409,63 @@ async function analyzeFacebookChannelRange(
           return Object.keys(store).length;
         });
 
+      const scrollState =
+        await page.evaluate(() => {
+          const candidates = Array.from(
+            document.querySelectorAll<HTMLElement>('*'),
+          )
+            .filter((element) => {
+              const style =
+                window.getComputedStyle(element);
+
+              const overflowY =
+                style.overflowY;
+
+              return (
+                (
+                  overflowY === 'auto' ||
+                  overflowY === 'scroll'
+                ) &&
+                element.scrollHeight >
+                  element.clientHeight + 100
+              );
+            })
+            .sort(
+              (a, b) =>
+                b.scrollHeight -
+                a.scrollHeight,
+            )
+            .slice(0, 5)
+            .map((element) => ({
+              tag: element.tagName,
+              role:
+                element.getAttribute('role'),
+              ariaLabel:
+                element.getAttribute(
+                  'aria-label',
+                ),
+              scrollTop:
+                element.scrollTop,
+              scrollHeight:
+                element.scrollHeight,
+              clientHeight:
+                element.clientHeight,
+            }));
+
+          return {
+            scrollY: window.scrollY,
+            scrollHeight:
+              document.documentElement.scrollHeight,
+            clientHeight:
+              document.documentElement.clientHeight,
+            candidates,
+          };
+        });
+
+      console.info(
+        `[FacebookScroll] vòng ${round + 1}: ${currentCount} mục, y=${scrollState.scrollY}, height=${scrollState.scrollHeight}, containers=${JSON.stringify(scrollState.candidates)}`,
+      );
+
       if (currentCount >= end) {
         break;
       }
@@ -1420,17 +1477,210 @@ async function analyzeFacebookChannelRange(
         unchangedRounds = 0;
       }
 
-      if (unchangedRounds >= 6) {
+      if (unchangedRounds >= 10) {
         break;
       }
 
-      await page.mouse.wheel(0, 800);
-      await page.waitForTimeout(2_500);
+      const scrollAmount =
+        unchangedRounds > 0 &&
+        unchangedRounds % 4 === 0
+          ? 1600
+          : 900;
+
+      const scrollTarget =
+        await page.evaluate(() => {
+          const mediaAnchors = Array.from(
+            document.querySelectorAll<HTMLAnchorElement>(
+              'a[href]',
+            ),
+          ).filter((anchor) => {
+            try {
+              const parsedUrl =
+                new URL(anchor.href);
+
+              const pathname =
+                parsedUrl.pathname;
+
+              return (
+                pathname.startsWith('/photo') ||
+                /^\/reel\/[^/]+/i.test(pathname) ||
+                /^\/share\/(?:r|v)\/[^/]+/i.test(pathname) ||
+                /\/videos\/[^/]+/i.test(pathname) ||
+                (
+                  pathname === '/watch/' &&
+                  parsedUrl.searchParams.has('v')
+                )
+              );
+            } catch {
+              return false;
+            }
+          });
+
+          const lastAnchor =
+            mediaAnchors[
+              mediaAnchors.length - 1
+            ];
+
+          let current =
+            lastAnchor?.parentElement || null;
+
+          let scrollContainer:
+            | HTMLElement
+            | null = null;
+
+          while (current) {
+            const style =
+              window.getComputedStyle(current);
+
+            if (
+              (
+                style.overflowY === 'auto' ||
+                style.overflowY === 'scroll'
+              ) &&
+              current.scrollHeight >
+                current.clientHeight + 100
+            ) {
+              scrollContainer = current;
+              break;
+            }
+
+            current = current.parentElement;
+          }
+
+          if (!scrollContainer) {
+            const candidates = Array.from(
+              document.querySelectorAll<HTMLElement>('*'),
+            )
+              .filter((element) => {
+                const style =
+                  window.getComputedStyle(element);
+
+                return (
+                  (
+                    style.overflowY === 'auto' ||
+                    style.overflowY === 'scroll'
+                  ) &&
+                  element.scrollHeight >
+                    element.clientHeight + 100
+                );
+              })
+              .sort(
+                (a, b) =>
+                  b.scrollHeight -
+                  a.scrollHeight,
+              );
+
+            scrollContainer =
+              candidates[0] || null;
+          }
+
+          if (!scrollContainer) {
+            return null;
+          }
+
+          const rect =
+            scrollContainer.getBoundingClientRect();
+
+          return {
+            x:
+              rect.left +
+              Math.max(1, rect.width / 2),
+            y:
+              rect.top +
+              Math.max(1, rect.height / 2),
+          };
+        });
+
+      if (scrollTarget) {
+        await page.mouse.move(
+          scrollTarget.x,
+          scrollTarget.y,
+        );
+
+        await page.mouse.wheel(
+          0,
+          scrollAmount,
+        );
+      } else {
+        await page.mouse.wheel(
+          0,
+          scrollAmount,
+        );
+      }
+
+      await page.waitForTimeout(3_000);
     }
 
-    await page.mouse.wheel(0, -600);
+    await page.evaluate(() => {
+      const candidates = Array.from(
+        document.querySelectorAll<HTMLElement>('*'),
+      )
+        .filter((element) => {
+          const style =
+            window.getComputedStyle(element);
+
+          return (
+            (
+              style.overflowY === 'auto' ||
+              style.overflowY === 'scroll'
+            ) &&
+            element.scrollHeight >
+              element.clientHeight + 100
+          );
+        })
+        .sort(
+          (a, b) =>
+            b.scrollHeight -
+            a.scrollHeight,
+        );
+
+      const scrollContainer =
+        candidates[0];
+
+      if (scrollContainer) {
+        scrollContainer.scrollBy({
+          top: -600,
+          behavior: 'instant',
+        });
+      }
+    });
+
     await page.waitForTimeout(1_500);
-    await page.mouse.wheel(0, 600);
+
+    await page.evaluate(() => {
+      const candidates = Array.from(
+        document.querySelectorAll<HTMLElement>('*'),
+      )
+        .filter((element) => {
+          const style =
+            window.getComputedStyle(element);
+
+          return (
+            (
+              style.overflowY === 'auto' ||
+              style.overflowY === 'scroll'
+            ) &&
+            element.scrollHeight >
+              element.clientHeight + 100
+          );
+        })
+        .sort(
+          (a, b) =>
+            b.scrollHeight -
+            a.scrollHeight,
+        );
+
+      const scrollContainer =
+        candidates[0];
+
+      if (scrollContainer) {
+        scrollContainer.scrollBy({
+          top: 600,
+          behavior: 'instant',
+        });
+      }
+    });
+
     await page.waitForTimeout(2_000);
 
     const rawItems =
@@ -1713,7 +1963,7 @@ async function analyzeTikTokChannelRange(
   }
 }
 
-function isFacebookProfileRootUrl(
+export function isFacebookProfileRootUrl(
   url: string,
 ): boolean {
   try {
