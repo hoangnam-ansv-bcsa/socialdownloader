@@ -1,6 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { useAppStore } from '../stores/useAppStore';
-import { Settings as SettIcon, Save, HelpCircle, AlertTriangle, CheckCircle } from 'lucide-react';
+import {
+  Settings as SettIcon,
+  Save,
+  CheckCircle,
+  Copy,
+  Eye,
+  EyeOff,
+  Link2,
+} from 'lucide-react';
 
 export const Settings: React.FC = () => {
   const { settings, fetchSettings, updateSettings } = useAppStore();
@@ -16,6 +24,24 @@ export const Settings: React.FC = () => {
   const [autoUpdate, setAutoUpdate] = useState(true);
 
   const [savedSuccess, setSavedSuccess] = useState(false);
+
+  const [pairingLoading, setPairingLoading] =
+    useState(false);
+
+  const [pairingConfigured, setPairingConfigured] =
+    useState(false);
+
+  const [pairingBackendUrl, setPairingBackendUrl] =
+    useState('');
+
+  const [pairingKey, setPairingKey] =
+    useState('');
+
+  const [showPairingKey, setShowPairingKey] =
+    useState(false);
+
+  const [pairingStatus, setPairingStatus] =
+    useState('');
 
   useEffect(() => {
     fetchSettings();
@@ -51,6 +77,136 @@ export const Settings: React.FC = () => {
 
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 3000);
+  };
+
+  const loadPairingInfo = async () => {
+    setPairingLoading(true);
+    setPairingStatus('');
+
+    try {
+      const response = await fetch(
+        '/api/facebook-helper/pairing-info',
+        {
+          cache: 'no-store',
+        },
+      );
+
+      const data: unknown =
+        await response.json();
+
+      if (
+        !response.ok ||
+        typeof data !== 'object' ||
+        data === null
+      ) {
+        throw new Error(
+          isVi
+            ? 'Không thể lấy thông tin ghép nối.'
+            : 'Unable to load pairing information.',
+        );
+      }
+
+      const backendUrl =
+        'backendUrl' in data &&
+        typeof data.backendUrl === 'string'
+          ? data.backendUrl
+          : '';
+
+      const helperKey =
+        'helperKey' in data &&
+        typeof data.helperKey === 'string'
+          ? data.helperKey
+          : '';
+
+      const configured =
+        'configured' in data &&
+        data.configured === true;
+
+      setPairingBackendUrl(backendUrl);
+      setPairingKey(helperKey);
+      setPairingConfigured(configured);
+
+      setPairingStatus(
+        configured
+          ? (
+            isVi
+              ? 'Đã lấy thông tin ghép nối.'
+              : 'Pairing information loaded.'
+          )
+          : (
+            isVi
+              ? 'Backend chưa có mã ghép nối.'
+              : 'No pairing code is configured.'
+          ),
+      );
+    } catch (error) {
+      setPairingStatus(
+        error instanceof Error
+          ? error.message
+          : (
+            isVi
+              ? 'Không thể lấy thông tin ghép nối.'
+              : 'Unable to load pairing information.'
+          ),
+      );
+    } finally {
+      setPairingLoading(false);
+    }
+  };
+
+  const copyPairingText = async (
+    value: string,
+    successMessage: string,
+  ) => {
+    if (!value) {
+      setPairingStatus(
+        isVi
+          ? 'Chưa có dữ liệu để sao chép.'
+          : 'There is no data to copy.',
+      );
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(
+        value,
+      );
+
+      setPairingStatus(successMessage);
+    } catch {
+      setPairingStatus(
+        isVi
+          ? 'Không thể sao chép vào clipboard.'
+          : 'Unable to copy to clipboard.',
+      );
+    }
+  };
+
+  const copyAllPairingInfo = async () => {
+    if (
+      !pairingBackendUrl ||
+      !pairingKey
+    ) {
+      setPairingStatus(
+        isVi
+          ? 'Hãy lấy đầy đủ thông tin ghép nối trước.'
+          : 'Load the pairing information first.',
+      );
+      return;
+    }
+
+    const text = [
+      'SocialDownloader Facebook Helper',
+      `Backend URL: ${pairingBackendUrl}`,
+      `Pairing code: ${pairingKey}`,
+    ].join('\n');
+
+    await copyPairingText(
+      text,
+      isVi
+        ? 'Đã sao chép toàn bộ thông tin ghép nối.'
+        : 'All pairing information copied.',
+    );
   };
 
   return (
@@ -190,6 +346,194 @@ export const Settings: React.FC = () => {
           </button>
         </div>
       </form>
+
+      <section className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-5 shadow-lg">
+        <div className="space-y-1">
+          <h3 className="text-sm font-bold text-white flex items-center gap-2">
+            <Link2 className="h-4 w-4 text-blue-500" />
+            <span>
+              {isVi
+                ? 'Ghép nối Facebook Helper'
+                : 'Facebook Helper Pairing'}
+            </span>
+          </h3>
+
+          <p className="text-xs text-slate-400">
+            {isVi
+              ? 'Lấy địa chỉ backend và mã ghép nối để nhập vào extension trên máy khác.'
+              : 'Get the backend URL and pairing code for the extension on another computer.'}
+          </p>
+        </div>
+
+        {!pairingBackendUrl && (
+          <button
+            type="button"
+            onClick={loadPairingInfo}
+            disabled={pairingLoading}
+            className="bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white text-xs font-semibold px-5 py-2.5 rounded-lg transition-all cursor-pointer"
+          >
+            {pairingLoading
+              ? (
+                isVi
+                  ? 'Đang lấy thông tin...'
+                  : 'Loading...'
+              )
+              : (
+                isVi
+                  ? 'Lấy thông tin ghép nối'
+                  : 'Get pairing information'
+              )}
+          </button>
+        )}
+
+        {pairingBackendUrl && (
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-slate-300 block">
+                {isVi
+                  ? 'Địa chỉ backend'
+                  : 'Backend URL'}
+              </label>
+
+              <div className="flex gap-2">
+                <input
+                  readOnly
+                  value={pairingBackendUrl}
+                  className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono"
+                />
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    copyPairingText(
+                      pairingBackendUrl,
+                      isVi
+                        ? 'Đã sao chép địa chỉ backend.'
+                        : 'Backend URL copied.',
+                    )
+                  }
+                  className="bg-slate-800 hover:bg-slate-700 text-white px-3 rounded-lg"
+                  title={
+                    isVi
+                      ? 'Sao chép backend'
+                      : 'Copy backend URL'
+                  }
+                >
+                  <Copy className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-slate-300 block">
+                {isVi
+                  ? 'Mã ghép nối'
+                  : 'Pairing code'}
+              </label>
+
+              <div className="flex gap-2">
+                <input
+                  readOnly
+                  type={
+                    showPairingKey
+                      ? 'text'
+                      : 'password'
+                  }
+                  value={pairingKey}
+                  className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white font-mono"
+                />
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setShowPairingKey(
+                      (current) => !current,
+                    )
+                  }
+                  className="bg-slate-800 hover:bg-slate-700 text-white px-3 rounded-lg"
+                  title={
+                    showPairingKey
+                      ? (
+                        isVi
+                          ? 'Ẩn mã'
+                          : 'Hide code'
+                      )
+                      : (
+                        isVi
+                          ? 'Hiện mã'
+                          : 'Show code'
+                      )
+                  }
+                >
+                  {showPairingKey
+                    ? (
+                      <EyeOff className="h-4 w-4" />
+                    )
+                    : (
+                      <Eye className="h-4 w-4" />
+                    )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    copyPairingText(
+                      pairingKey,
+                      isVi
+                        ? 'Đã sao chép mã ghép nối.'
+                        : 'Pairing code copied.',
+                    )
+                  }
+                  className="bg-slate-800 hover:bg-slate-700 text-white px-3 rounded-lg"
+                  title={
+                    isVi
+                      ? 'Sao chép mã'
+                      : 'Copy pairing code'
+                  }
+                >
+                  <Copy className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={copyAllPairingInfo}
+                disabled={!pairingConfigured}
+                className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold px-5 py-2.5 rounded-lg"
+              >
+                {isVi
+                  ? 'Sao chép cả hai để chia sẻ'
+                  : 'Copy both to share'}
+              </button>
+
+              <button
+                type="button"
+                onClick={loadPairingInfo}
+                disabled={pairingLoading}
+                className="bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold px-5 py-2.5 rounded-lg"
+              >
+                {isVi
+                  ? 'Làm mới'
+                  : 'Refresh'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {pairingStatus && (
+          <div className="text-xs text-slate-300 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2">
+            {pairingStatus}
+          </div>
+        )}
+
+        <p className="text-[11px] leading-5 text-amber-400/90">
+          {isVi
+            ? 'Chỉ chia sẻ mã này với người bạn tin tưởng. Người có mã có thể gửi phiên Facebook tới backend của bạn.'
+            : 'Only share this code with trusted people. Anyone with the code can send a Facebook session to your backend.'}
+        </p>
+      </section>
     </div>
   );
 };

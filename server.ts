@@ -786,6 +786,41 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
+app.get(
+  '/api/facebook-helper/pairing-info',
+  (req, res) => {
+    res.setHeader(
+      'Cache-Control',
+      'no-store',
+    );
+
+    const helperKey =
+      process.env.FACEBOOK_HELPER_KEY || '';
+
+    const forwardedProto =
+      req.header('x-forwarded-proto');
+
+    const forwardedHost =
+      req.header('x-forwarded-host');
+
+    const protocol =
+      forwardedProto ||
+      req.protocol ||
+      'http';
+
+    const host =
+      forwardedHost ||
+      req.get('host') ||
+      `localhost:${PORT}`;
+
+    return res.json({
+      configured: Boolean(helperKey),
+      backendUrl: `${protocol}://${host}`,
+      helperKey,
+    });
+  },
+);
+
 app.get('/api/settings', (_req, res) => {
   res.json(getSettings());
 });
