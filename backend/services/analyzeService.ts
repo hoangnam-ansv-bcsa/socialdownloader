@@ -1,3 +1,7 @@
+import {
+  getTikTokPhotoMetadata,
+} from './ytDlp';
+
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -66,6 +70,26 @@ function isTikTokUrl(url: string): boolean {
     hostname === 'tiktok.com' ||
     hostname.endsWith('.tiktok.com')
   );
+}
+
+function isTikTokSingleMediaUrl(
+  url: string,
+): boolean {
+  if (!isTikTokUrl(url)) {
+    return false;
+  }
+
+  try {
+    const pathname =
+      new URL(url).pathname;
+
+    return (
+      /\/video\/\d+/i.test(pathname) ||
+      /\/photo\/\d+/i.test(pathname)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function isFacebookUrl(url: string): boolean {
@@ -950,6 +974,45 @@ async function analyzeInstagramPost(
 export async function analyzeUrl(
   url: string,
 ): Promise<AnalyzeResult> {
+  if (isTikTokSingleMediaUrl(url)) {
+    try {
+      const pathname =
+        new URL(url).pathname;
+
+      if (/\/photo\/\d+/i.test(pathname)) {
+        const metadata =
+          await getTikTokPhotoMetadata(url);
+
+        return {
+          id:
+            metadata.id ||
+            randomUUID(),
+          url:
+            metadata.webpage_url ||
+            metadata.original_url ||
+            url,
+          platform: 'TikTok',
+          title:
+            metadata.title ||
+            'TikTok photo post',
+          author:
+            metadata.uploader ||
+            metadata.channel ||
+            'TikTok',
+          thumbnail:
+            metadata.thumbnail,
+          estimatedSize:
+            metadata.filesize ||
+            metadata.filesize_approx ||
+            0,
+          mediaType: 'album',
+        };
+      }
+    } catch {
+      // Video TikTok vẫn tiếp tục qua yt-dlp ở phía dưới.
+    }
+  }
+
   if (isInstagramPostUrl(url)) {
     return analyzeInstagramPost(url);
   }
@@ -2129,6 +2192,19 @@ export async function analyzeChannelRange(
   );
 
   if (isTikTokUrl(url)) {
+    if (isTikTokSingleMediaUrl(url)) {
+      if (normalizedStart > 1) {
+        return [];
+      }
+
+      const item = await analyzeUrl(url);
+
+      return [item].slice(
+        normalizedStart - 1,
+        normalizedEnd,
+      );
+    }
+
     return analyzeTikTokChannelRange(
       url,
       normalizedStart,

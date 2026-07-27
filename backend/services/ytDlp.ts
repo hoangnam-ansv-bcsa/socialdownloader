@@ -180,7 +180,7 @@ function parseNumber(value?: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-async function getTikTokPhotoMetadata(
+export async function getTikTokPhotoMetadata(
   url: string,
 ): Promise<YtDlpMetadata> {
   const browser = await chromium.launch({
