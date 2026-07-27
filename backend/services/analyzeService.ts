@@ -2000,10 +2000,16 @@ export function isFacebookProfileRootUrl(
   }
 }
 
+type FacebookTabProgressCallback = (
+  items: AnalyzeResult[],
+  tabUrl: string,
+) => void | Promise<void>;
+
 async function analyzeFacebookProfileTabsRange(
   url: string,
   start: number,
   end: number,
+  onTabProgress?: FacebookTabProgressCallback,
 ): Promise<AnalyzeResult[]> {
   const parsedUrl = new URL(url);
 
@@ -2041,13 +2047,26 @@ async function analyzeFacebookProfileTabsRange(
         `[FacebookTabs] ${tabUrl}: ${results.length} bài`,
       );
 
+      const newItems: AnalyzeResult[] = [];
+
       for (const item of results) {
         const key =
           `${item.mediaType}:${item.id || item.url}`;
 
         if (!collected.has(key)) {
           collected.set(key, item);
+          newItems.push(item);
         }
+      }
+
+      if (
+        onTabProgress &&
+        newItems.length > 0
+      ) {
+        await onTabProgress(
+          newItems,
+          tabUrl,
+        );
       }
 
       const isLastTab =
@@ -2096,6 +2115,7 @@ export async function analyzeChannelRange(
   url: string,
   start: number,
   end: number,
+  onFacebookTabProgress?: FacebookTabProgressCallback,
 ): Promise<AnalyzeResult[]> {
   const normalizedStart = Math.max(
     1,
@@ -2121,6 +2141,7 @@ export async function analyzeChannelRange(
         url,
         normalizedStart,
         normalizedEnd,
+        onFacebookTabProgress,
       );
     }
 

@@ -208,62 +208,72 @@ async function runChannelScan(
         'Đang quét Facebook profile một lượt, không lặp lại theo batch.',
       );
 
-      const results = await analyzeChannelRange(
+      const deliveredKeys =
+        new Set<string>();
+
+      await analyzeChannelRange(
         session.url,
         1,
         1000,
+        async (
+          tabResults,
+          tabUrl,
+        ) => {
+          if (session.stopRequested) {
+            return;
+          }
+
+          const newItems: MediaItem[] = [];
+
+          for (const result of tabResults) {
+            const item =
+              mapChannelResultToMediaItem(
+                result,
+              );
+
+            const key =
+              `${item.platform}:${item.mediaType}:${item.id || item.url}`;
+
+            if (!deliveredKeys.has(key)) {
+              deliveredKeys.add(key);
+              newItems.push(item);
+            }
+          }
+
+          for (
+            let offset = 0;
+            offset < newItems.length;
+            offset += CHANNEL_SCAN_BATCH_SIZE
+          ) {
+            if (session.stopRequested) {
+              return;
+            }
+
+            const batch =
+              newItems.slice(
+                offset,
+                offset +
+                  CHANNEL_SCAN_BATCH_SIZE,
+              );
+
+            session.items.push(...batch);
+            session.updatedAt = Date.now();
+
+            addLog(
+              'info',
+              'ChannelScanner',
+              `Đã đưa ${session.items.length} mục Facebook lên giao diện sau khi quét ${tabUrl}.`,
+            );
+
+            await sleep(300);
+          }
+        },
       );
 
       if (session.stopRequested) {
         session.status = 'stopped';
         session.updatedAt = Date.now();
         return;
-      }
-
-      const uniqueItems =
-        new Map<string, MediaItem>();
-
-      for (const result of results) {
-        const item =
-          mapChannelResultToMediaItem(result);
-
-        const key =
-          `${item.platform}:${item.mediaType}:${item.id || item.url}`;
-
-        if (!uniqueItems.has(key)) {
-          uniqueItems.set(key, item);
-        }
-      }
-
-      const allItems =
-        Array.from(uniqueItems.values());
-
-      for (
-        let offset = 0;
-        offset < allItems.length;
-        offset += CHANNEL_SCAN_BATCH_SIZE
-      ) {
-        if (session.stopRequested) {
-          session.status = 'stopped';
-          session.updatedAt = Date.now();
-          return;
-        }
-
-        const batch = allItems.slice(
-          offset,
-          offset + CHANNEL_SCAN_BATCH_SIZE,
-        );
-
-        session.items.push(...batch);
-        session.updatedAt = Date.now();
-
-        addLog(
-          'info',
-          'ChannelScanner',
-          `Đã chuyển ${session.items.length}/${allItems.length} bài Facebook lên giao diện.`,
-        );
-
-        await sleep(500);
       }
 
       session.status = 'completed';
