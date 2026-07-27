@@ -103,7 +103,15 @@ function isInstagramPostUrl(url: string): boolean {
   }
 
   try {
-    return new URL(url).pathname.startsWith('/p/');
+    const pathname =
+      new URL(url).pathname;
+
+    return (
+      /^\/p\/[^/]+/i.test(pathname) ||
+      /^\/reel\/[^/]+/i.test(pathname) ||
+      /^\/reels\/[^/]+/i.test(pathname) ||
+      /^\/tv\/[^/]+/i.test(pathname)
+    );
   } catch {
     return false;
   }
@@ -291,6 +299,52 @@ async function getTikTokPhotoMetadata(
   }
 }
 
+function getCookiesPathForUrl(
+  url: string,
+  cookiesFile?: string,
+): string {
+  if (cookiesFile) {
+    return path.resolve(cookiesFile);
+  }
+
+  const hostname = getHostname(url);
+
+  if (
+    hostname === 'instagram.com' ||
+    hostname.endsWith('.instagram.com')
+  ) {
+    return path.resolve(
+      process.env.INSTAGRAM_COOKIES ||
+        'secrets/instagram_cookies.txt',
+    );
+  }
+
+  if (
+    hostname === 'tiktok.com' ||
+    hostname.endsWith('.tiktok.com')
+  ) {
+    return path.resolve(
+      process.env.TIKTOK_COOKIES ||
+        'secrets/tiktok_cookies.txt',
+    );
+  }
+
+  if (
+    hostname === 'facebook.com' ||
+    hostname.endsWith('.facebook.com')
+  ) {
+    return path.resolve(
+      process.env.FACEBOOK_COOKIES ||
+        'secrets/facebook_cookies.txt',
+    );
+  }
+
+  return path.resolve(
+    process.env.YT_DLP_COOKIES ||
+      'secrets/cookies.txt',
+  );
+}
+
 export async function getMediaMetadata(
   url: string,
 ): Promise<YtDlpMetadata> {
@@ -310,9 +364,8 @@ export async function getMediaMetadata(
     url,
   );
 
-  const cookiesPath = path.resolve(
-    process.env.YT_DLP_COOKIES || 'secrets/cookies.txt',
-  );
+  const cookiesPath =
+    getCookiesPathForUrl(url);
 
   try {
     await fs.access(cookiesPath);
@@ -342,8 +395,8 @@ async function loadInstagramBrowserCookies(
 ) {
   const cookiesPath = path.resolve(
     cookiesFile ||
-      process.env.YT_DLP_COOKIES ||
-      'secrets/cookies.txt',
+      process.env.INSTAGRAM_COOKIES ||
+      'secrets/instagram_cookies.txt',
   );
 
   try {
@@ -426,8 +479,8 @@ async function loadFacebookBrowserCookies(
 
   const cookiesPath = path.resolve(
     cookiesFile ||
-      process.env.YT_DLP_COOKIES ||
-      'secrets/cookies.txt',
+      process.env.FACEBOOK_COOKIES ||
+      'secrets/facebook_cookies.txt',
   );
 
   try {
@@ -1358,11 +1411,11 @@ export async function downloadMedia(
     url,
   );
 
-  const resolvedCookiesFile = path.resolve(
-    cookiesFile ||
-    process.env.YT_DLP_COOKIES ||
-    'secrets/cookies.txt',
-  );
+  const resolvedCookiesFile =
+    getCookiesPathForUrl(
+      url,
+      cookiesFile,
+    );
 
   try {
     await fs.access(resolvedCookiesFile);

@@ -161,7 +161,15 @@ function isInstagramPostUrl(url: string): boolean {
   }
 
   try {
-    return new URL(url).pathname.startsWith('/p/');
+    const pathname =
+      new URL(url).pathname;
+
+    return (
+      /^\/p\/[^/]+/i.test(pathname) ||
+      /^\/reel\/[^/]+/i.test(pathname) ||
+      /^\/reels\/[^/]+/i.test(pathname) ||
+      /^\/tv\/[^/]+/i.test(pathname)
+    );
   } catch {
     return false;
   }
@@ -188,13 +196,53 @@ function addPlatformArguments(
   }
 }
 
+function getCookiesPathForUrl(
+  url: string,
+): string {
+  const hostname = getHostname(url);
+
+  if (
+    hostname === 'instagram.com' ||
+    hostname.endsWith('.instagram.com')
+  ) {
+    return path.resolve(
+      process.env.INSTAGRAM_COOKIES ||
+        'secrets/instagram_cookies.txt',
+    );
+  }
+
+  if (
+    hostname === 'tiktok.com' ||
+    hostname.endsWith('.tiktok.com')
+  ) {
+    return path.resolve(
+      process.env.TIKTOK_COOKIES ||
+        'secrets/tiktok_cookies.txt',
+    );
+  }
+
+  if (
+    hostname === 'facebook.com' ||
+    hostname.endsWith('.facebook.com')
+  ) {
+    return path.resolve(
+      process.env.FACEBOOK_COOKIES ||
+        'secrets/facebook_cookies.txt',
+    );
+  }
+
+  return path.resolve(
+    process.env.FACEBOOK_COOKIES ||
+      'secrets/facebook_cookies.txt',
+  );
+}
+
 async function addCookiesIfAvailable(
   args: string[],
+  url: string,
 ): Promise<void> {
-  const cookiesPath = path.resolve(
-    process.env.YT_DLP_COOKIES ||
-      'secrets/cookies.txt',
-  );
+  const cookiesPath =
+    getCookiesPathForUrl(url);
 
   try {
     await fs.access(cookiesPath);
@@ -426,8 +474,8 @@ async function loadFacebookBrowserCookies() {
   }
 
   const cookiesPath = path.resolve(
-    process.env.YT_DLP_COOKIES ||
-      'secrets/cookies.txt',
+    process.env.INSTAGRAM_COOKIES ||
+      'secrets/instagram_cookies.txt',
   );
 
   try {
@@ -690,8 +738,8 @@ async function analyzeFacebookPhoto(
 
 async function loadInstagramBrowserCookies() {
   const cookiesPath = path.resolve(
-    process.env.YT_DLP_COOKIES ||
-      'secrets/cookies.txt',
+    process.env.TIKTOK_COOKIES ||
+      'secrets/tiktok_cookies.txt',
   );
 
   try {
@@ -918,7 +966,7 @@ export async function analyzeUrl(
   ];
 
   addPlatformArguments(args, url);
-  await addCookiesIfAvailable(args);
+  await addCookiesIfAvailable(args, url);
 
   args.push(url);
 
@@ -967,7 +1015,7 @@ export async function analyzeChannel(
   }
 
   addPlatformArguments(args, url);
-  await addCookiesIfAvailable(args);
+  await addCookiesIfAvailable(args, url);
 
   args.push(url);
 
@@ -1912,6 +1960,16 @@ export function isFacebookProfileRootUrl(
   try {
     const parsedUrl = new URL(url);
 
+    const hostname =
+      parsedUrl.hostname.toLowerCase();
+
+    if (
+      hostname !== 'facebook.com' &&
+      !hostname.endsWith('.facebook.com')
+    ) {
+      return false;
+    }
+
     const segments =
       parsedUrl.pathname
         .split('/')
@@ -2108,23 +2166,56 @@ export async function analyzeChannelRange(
     );
   }
 
+  if (isInstagramPostUrl(url)) {
+    if (normalizedStart > 1) {
+      return [];
+    }
+
+    const item = await analyzeUrl(url);
+
+    return [item].slice(
+      normalizedStart - 1,
+      normalizedEnd,
+    );
+  }
+
+  const parsedChannelUrl =
+    new URL(url);
+
+  const isInstagramChannel =
+    parsedChannelUrl.hostname ===
+      'instagram.com' ||
+    parsedChannelUrl.hostname.endsWith(
+      '.instagram.com',
+    );
+
+  const effectiveEnd =
+    isInstagramChannel
+      ? Math.min(
+          normalizedEnd,
+          normalizedStart + 49,
+        )
+      : normalizedEnd;
+
   const args: string[] = [
     '--dump-single-json',
     '--flat-playlist',
     '--skip-download',
     '--no-warnings',
     '--playlist-items',
-    `${normalizedStart}:${normalizedEnd}`,
+    `${normalizedStart}:${effectiveEnd}`,
     '--sleep-requests',
-    '2',
+    isInstagramChannel ? '5' : '2',
     '--extractor-retries',
-    '10',
+    isInstagramChannel ? '3' : '10',
     '--retry-sleep',
-    'extractor:5',
+    isInstagramChannel
+      ? 'extractor:10'
+      : 'extractor:5',
   ];
 
   addPlatformArguments(args, url);
-  await addCookiesIfAvailable(args);
+  await addCookiesIfAvailable(args, url);
 
   args.push(url);
 
