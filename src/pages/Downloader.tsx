@@ -33,6 +33,8 @@ export const Downloader: React.FC = () => {
     clearAnalyzedItems,
     addToQueue,
     setTab,
+    urlInput,
+    setUrlInput,
   } = useAppStore();
 
   const isVi = settings?.language === 'vi';
@@ -41,7 +43,6 @@ export const Downloader: React.FC = () => {
   const [subTab, setSubTab] = useState<'batch' | 'multi'>('batch');
 
   // Input states
-  const [username, setUsername] = useState('');
   const [intervalSecs, setIntervalSecs] = useState('0');
   const [pastedUrls, setPastedUrls] = useState('');
 
@@ -60,7 +61,7 @@ export const Downloader: React.FC = () => {
 
   // Quét toàn bộ bài công khai từ link kênh hoặc tài khoản.
   const handleFetchCreatorData = () => {
-    const rawValue = username.trim();
+    const rawValue = urlInput.trim();
 
     if (!rawValue) {
       return;
@@ -189,8 +190,8 @@ export const Downloader: React.FC = () => {
               </label>
               <input
                 type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                value={urlInput}
+                onChange={(e) => setUrlInput(e.target.value)}
                 placeholder={
                   isVi
                     ? 'Ví dụ: https://www.tiktok.com/@tenkenh hoặc @tenkenh'
@@ -223,7 +224,7 @@ export const Downloader: React.FC = () => {
             <div className="md:col-span-3">
               <button
                 onClick={handleFetchCreatorData}
-                disabled={!username.trim() || isAnalyzing}
+                disabled={!urlInput.trim() || isAnalyzing}
                 className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold py-2.5 rounded-lg flex items-center justify-center space-x-2 transition-all cursor-pointer"
               >
                 {isAnalyzing ? (

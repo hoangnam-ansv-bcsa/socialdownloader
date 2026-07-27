@@ -86,7 +86,7 @@ export const Queue: React.FC = () => {
 
   const handleDeleteSelectedFinished =
     async () => {
-      const ids = Array.from(
+      const ids: string[] = Array.from(
         selectedFinishedIds,
       );
 
